@@ -1,3 +1,5 @@
+mod packets;
+
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -16,7 +18,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (client_socket, _) = listener.accept().await?;
 
         tokio::spawn(async move {
-
             // Connect to minecraft server
             let server_socket = match TcpStream::connect(server_address).await {
                 Ok(stream) => stream,
