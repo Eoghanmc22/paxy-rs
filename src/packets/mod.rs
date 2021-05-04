@@ -10,4 +10,5 @@ pub trait Packet : Any {
     fn write(&self, buffer: &mut BytesMut);
     fn get_id() -> i32 where Self: Sized;
     fn is_inbound() -> bool where Self: Sized;
+    fn as_any(&mut self) -> &mut dyn Any;
 }

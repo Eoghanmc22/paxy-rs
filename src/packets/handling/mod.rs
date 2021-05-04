@@ -1,24 +1,6 @@
 use crate::packets::Packet;
 use std::collections::HashMap;
-use bytes::{BytesMut, Buf};
-use std::any::Any;
-use crate::utils::VarInts;
-
-// buffer, end
-pub fn get_valid_data(buffer: &mut BytesMut) -> Option<BytesMut> {
-    let len = buffer.remaining();
-    if len < 3 {
-        return None;
-    }
-
-    let expected_length = if let Some((num, _bytes)) = buffer.get_var_i32_limit(3) {
-        num as usize
-    } else {
-        return None;
-    };
-    buffer.advance(expected_length);
-    return Some(BytesMut::from(&buffer[..expected_length]));
-}
+use bytes::BytesMut;
 
 //represents a packet that is decompressed, decrypted, and has a known id
 pub struct UnparsedPacket {
@@ -36,8 +18,8 @@ pub struct HandlingContext {
     inbound_packets: HashMap<i32, Box<dyn Fn(&mut BytesMut) -> Box<dyn Packet> + Send + Sync>>,
     outbound_packets: HashMap<i32, Box<dyn Fn(&mut BytesMut) -> Box<dyn Packet> + Send + Sync>>,
 
-    inbound_transformers: HashMap<i32, Vec<Box<dyn Fn(&mut Box<dyn Packet>) + Send + Sync>>>,
-    outbound_transformers: HashMap<i32, Vec<Box<dyn Fn(&mut Box<dyn Packet>) + Send + Sync>>>
+    inbound_transformers: HashMap<i32, Vec<Box<dyn Fn(&mut dyn Packet) + Send + Sync>>>,
+    outbound_transformers: HashMap<i32, Vec<Box<dyn Fn(&mut dyn Packet) + Send + Sync>>>,
 }
 
 impl HandlingContext {
@@ -62,7 +44,7 @@ impl HandlingContext {
         let mut packet: Box<dyn Packet> = packet_supplier(&mut packet.buf);
 
         for transformer in transformers.iter() {
-            transformer(&mut packet);
+            transformer(&mut *packet);
         }
 
         let mut buffer = BytesMut::new();
@@ -83,7 +65,7 @@ impl HandlingContext {
         let mut packet: Box<dyn Packet> = packet_supplier(&mut packet.buf);
 
         for transformer in transformers.iter() {
-            transformer(&mut packet);
+            transformer(&mut *packet);
         }
 
         let mut buffer = BytesMut::new();
@@ -92,12 +74,33 @@ impl HandlingContext {
         buffer
     }
 
-    pub fn register_inbound_transformer<P: Packet, F: 'static + Fn(&mut P) + Send + Sync>(&mut self, transformer: F) {
+    pub fn register_inbound_packet_supplier<P: Packet, F: 'static + Fn(&mut BytesMut) -> P + Send + Sync>(&mut self, transformer: F) {
+        if !P::is_inbound() {
+            panic!("bad inbound_packet_supplier");
+        }
         let packet_id = P::get_id();
-        let transformer : Box<dyn Fn(&mut Box<dyn Packet>) + Send + Sync> = Box::new(move |packet| {
-            let any = packet as &mut dyn Any;
-            if let Some(casted_packet) = any.downcast_mut() {
+        self.inbound_packets.insert(packet_id, Box::new(move |buf| Box::new(transformer(buf))));
+    }
+
+    pub fn register_outbound_packet_supplier<P: Packet, F: 'static + Fn(&mut BytesMut) -> Box<P> + Send + Sync>(&mut self, transformer: F) {
+        if P::is_inbound() {
+            panic!("bad outbound_packet_supplier");
+        }
+        let packet_id = P::get_id();
+        self.outbound_packets.insert(packet_id, Box::new(move |buf| transformer(buf)));
+    }
+
+    pub fn register_inbound_transformer<P: Packet, F: 'static + Fn(&mut Box<P>) + Send + Sync>(&mut self, transformer: F) {
+        if !P::is_inbound() {
+            panic!("bad inbound_transformer");
+        }
+        let packet_id = P::get_id();
+        let transformer : Box<dyn Fn(&mut dyn Packet) + Send + Sync> = Box::new(move |packet| {
+            let any_packet = packet.as_any();
+            if let Some(casted_packet) = any_packet.downcast_mut() {
                 transformer(casted_packet)
+            } else {
+                println!("couldnt cast, this should never be hit ever");
             }
         });
         if let Some(vec) = self.inbound_transformers.get_mut(&packet_id) {
@@ -108,11 +111,16 @@ impl HandlingContext {
     }
 
     pub fn register_outbound_transformer<P: Packet, F: 'static + Fn(&mut P) + Send + Sync>(&mut self, transformer: F) {
+        if P::is_inbound() {
+            panic!("bad outbound_transformer");
+        }
         let packet_id = P::get_id();
-        let transformer : Box<dyn Fn(&mut Box<dyn Packet>) + Send + Sync> = Box::new(move |packet| {
-            let any = packet as &mut dyn Any;
-            if let Some(casted_packet) = any.downcast_mut() {
+        let transformer : Box<dyn Fn(&mut dyn Packet) + Send + Sync> = Box::new(move |packet| {
+            let any_packet = packet.as_any();
+            if let Some(casted_packet) = any_packet.downcast_mut() {
                 transformer(casted_packet)
+            } else {
+                println!("couldnt cast, this should never be hit ever");
             }
         });
         if let Some(vec) = self.outbound_transformers.get_mut(&packet_id) {

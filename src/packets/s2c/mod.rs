@@ -1,6 +1,7 @@
 use crate::packets::Packet;
 use bytes::{BytesMut, BufMut, Buf};
 use crate::utils::{VarInts, Bools};
+use std::any::Any;
 
 pub struct EntityPositionPacket {
     pub entity_id: i32,
@@ -39,5 +40,9 @@ impl Packet for EntityPositionPacket {
 
     fn is_inbound() -> bool where Self: Sized {
         false
+    }
+
+    fn as_any(&mut self) -> &mut dyn Any {
+        self
     }
 }

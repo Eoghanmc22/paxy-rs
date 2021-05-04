@@ -7,11 +7,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use crate::packets::handling::{HandlingContext, get_valid_data, UnparsedPacket};
+use crate::packets::handling::{HandlingContext, UnparsedPacket};
 use crate::packets::s2c::EntityPositionPacket;
-use bytes::{BytesMut, Buf, BufMut};
+use bytes::{BytesMut, Buf};
 use std::sync::Arc;
 use crate::utils::VarInts;
+use crate::packets::Packet;
+use std::any::Any;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,9 +23,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(proxy_address).await?;
 
     let mut handler_context = HandlingContext::new();
-    /*handler_context.register_outbound_transformer(|packet: &mut EntityPositionPacket| {
+    handler_context.register_outbound_packet_supplier(|buf| {
+        Box::new(EntityPositionPacket::read(buf))
+    });
+    handler_context.register_outbound_transformer(|packet: &mut EntityPositionPacket| {
         packet.delta_x = 0;
-    });*/
+        packet.delta_y = 100;
+    });
     let handler_context = Arc::new(handler_context);
 
     loop {
@@ -31,7 +37,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let handler_context = handler_context.clone();
         tokio::spawn(async move {
-            println!("spawn");
             // Connect to minecraft server
             let server_socket = match TcpStream::connect(server_address).await {
                 Ok(stream) => stream,
@@ -50,7 +55,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn forward_data(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, inbound: bool, handler: Arc<HandlingContext>) {
-    println!("forward_data");
     let mut buf = BytesMut::new();
     buf.reserve(2048);
     unsafe {
@@ -62,17 +66,14 @@ async fn forward_data(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, inbound: 
     loop {
         match from.read(&mut buf[read..]).await {
             Ok(n) if n == 0 => {
-                println!("n == 0");
                 return
             },
             Ok(n) => {
                 let len = n + read;
-                println!("hit: {}, {}, {}, {}, {:?}", len, buf.len(), read, inbound, &buf[0..len]);
 
                 process(&mut buf, &mut read, len, &mut to, inbound, handler.clone()).await;
 
                 while n + read >= buf.len() {
-                    println!("resize");
                     buf.reserve(buf.len());
                     unsafe {
                         buf.set_len(buf.len()*2);
@@ -82,9 +83,7 @@ async fn forward_data(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, inbound: 
             Err(e) if e.kind() != io::ErrorKind::WouldBlock => {
                 println!("error {}", e);
             }
-            _ => {
-                println!("_");
-            },
+            _ => {},
         };
     }
 }
@@ -109,8 +108,21 @@ async fn process(mut buf: &mut BytesMut, read: &mut usize, len: usize, to: &mut 
 
             // the full packet is available
             if len >= next {
-                println!("write");
-                if let Err(e) = to.write_all(&buf[pointer..next]).await {
+                let (id, id_bytes) = working_buf.get_var_i32();
+
+                let unparsed_packet = UnparsedPacket::new(id, working_buf);
+                let processed_buf = if inbound {
+                    handler.handle_inbound_packet(unparsed_packet)
+                } else {
+                    handler.handle_outbound_packet(unparsed_packet)
+                };
+
+                // write in 2 steps to avoid extra copy
+                if let Err(e) = to.write_all(&buf[pointer..pointer+(bytes+id_bytes) as usize]).await {
+                    panic!("failed to write to socket; err = {:?}", e);
+                }
+
+                if let Err(e) = to.write_all(&processed_buf[0..(packet_len-id_bytes) as usize]).await {
                     panic!("failed to write to socket; err = {:?}", e);
                 }
                 pointer = next;
