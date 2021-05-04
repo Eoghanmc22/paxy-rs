@@ -8,12 +8,8 @@ use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use crate::packets::handling::{HandlingContext, UnparsedPacket};
-use crate::packets::s2c::EntityPositionPacket;
-use bytes::{BytesMut, Buf};
 use std::sync::Arc;
 use crate::utils::VarInts;
-use crate::packets::Packet;
-use std::any::Any;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -22,14 +18,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = TcpListener::bind(proxy_address).await?;
 
-    let mut handler_context = HandlingContext::new();
+    let mut handler_context = HandlingContext::new();/*
     handler_context.register_outbound_packet_supplier(|buf| {
         Box::new(EntityPositionPacket::read(buf))
     });
     handler_context.register_outbound_transformer(|packet: &mut EntityPositionPacket| {
         packet.delta_x = 0;
         packet.delta_y = 100;
-    });
+    });*/
     let handler_context = Arc::new(handler_context);
 
     loop {
@@ -55,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn forward_data(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, inbound: bool, handler: Arc<HandlingContext>) {
-    let mut buf = BytesMut::new();
+    let mut buf = Vec::new();
     buf.reserve(2048);
     unsafe {
         buf.set_len(buf.len()+2048);
@@ -91,7 +87,7 @@ async fn forward_data(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, inbound: 
 // todo handle protocol state switching. right now we only check packet ids
 // todo handle encryption
 // todo handle compression
-async fn process(mut buf: &mut BytesMut, read: &mut usize, len: usize, to: &mut OwnedWriteHalf, inbound: bool, handler: Arc<HandlingContext>) {
+async fn process(mut buf: &mut Vec<u8>, read: &mut usize, len: usize, to: &mut OwnedWriteHalf, inbound: bool, handler: Arc<HandlingContext>) {
     let mut pointer = 0;
     let mut next;
 
@@ -101,7 +97,7 @@ async fn process(mut buf: &mut BytesMut, read: &mut usize, len: usize, to: &mut 
             break;
         }
         // this does a copy which isnt to optimal. really we want to create a mutable view
-        let mut working_buf = BytesMut::from(&buf.chunk()[pointer..]);
+        let mut working_buf = &buf[pointer..];
 
         if let Some((packet_len, bytes)) = working_buf.get_var_i32_limit(3) {
             next = packet_len as usize + pointer + bytes as usize;
@@ -111,19 +107,25 @@ async fn process(mut buf: &mut BytesMut, read: &mut usize, len: usize, to: &mut 
                 let (id, id_bytes) = working_buf.get_var_i32();
 
                 let unparsed_packet = UnparsedPacket::new(id, working_buf);
-                let processed_buf = if inbound {
+                let optional_processed_buf = if inbound {
                     handler.handle_inbound_packet(unparsed_packet)
                 } else {
                     handler.handle_outbound_packet(unparsed_packet)
                 };
 
-                // write in 2 steps to avoid extra copy
-                if let Err(e) = to.write_all(&buf[pointer..pointer+(bytes+id_bytes) as usize]).await {
-                    panic!("failed to write to socket; err = {:?}", e);
-                }
+                if let Some(buffer) = optional_processed_buf {
+                    // write in 2 steps to avoid extra copy
+                    if let Err(e) = to.write_all(&buf[pointer..pointer+(bytes+id_bytes) as usize]).await {
+                        panic!("failed to write to socket; err = {:?}", e);
+                    }
 
-                if let Err(e) = to.write_all(&processed_buf[0..(packet_len-id_bytes) as usize]).await {
-                    panic!("failed to write to socket; err = {:?}", e);
+                    if let Err(e) = to.write_all(&buffer[0..(packet_len-id_bytes) as usize]).await {
+                        panic!("failed to write to socket; err = {:?}", e);
+                    }
+                } else {
+                    if let Err(e) = to.write_all(&buf[pointer..next as usize]).await {
+                        panic!("failed to write to socket; err = {:?}", e);
+                    }
                 }
                 pointer = next;
             } else {
@@ -142,7 +144,7 @@ async fn process(mut buf: &mut BytesMut, read: &mut usize, len: usize, to: &mut 
     }
 }
 
-fn validate_small_frame(buf: &mut BytesMut, pointer: usize, len: usize) -> bool {
+fn validate_small_frame(buf: &mut Vec<u8>, pointer: usize, len: usize) -> bool {
     if len > pointer && len - pointer < 3 {
         for index in pointer..len {
             if buf[index] < 128 {

@@ -1,4 +1,4 @@
-use bytes::{BytesMut, Buf, BufMut};
+use bytes::{Buf, BufMut};
 
 pub trait VarInts {
     fn get_var_i32(&mut self) -> (i32, i32);
@@ -6,13 +6,15 @@ pub trait VarInts {
     fn get_var_i32_limit(&mut self, max_size: u32) -> Option<(i32, i32)>;
 
     fn get_var_i64(&mut self) -> (i64, i64);
+}
 
+pub trait VarIntsMut {
     fn put_var_i32(&mut self, num: i32);
 
     fn put_var_i64(&mut self, num: i64);
 }
 
-impl VarInts for BytesMut {
+impl<T: Buf> VarInts for T {
     fn get_var_i32(&mut self) -> (i32, i32) {
         let mut num_read = 0i32;
         let mut result = 0i32;
@@ -66,7 +68,9 @@ impl VarInts for BytesMut {
         }
         (result, num_read)
     }
+}
 
+impl<T: BufMut> VarIntsMut for T {
     fn put_var_i32(&mut self, num: i32) {
         let mut number = num;
         loop {
@@ -97,17 +101,22 @@ impl VarInts for BytesMut {
         }
     }
 }
+
 pub trait Bools {
     fn get_bool(&mut self) -> bool;
+}
 
+pub trait BoolsMut {
     fn put_bool(&mut self, val: bool);
 }
 
-impl Bools for BytesMut {
+impl<T: Buf> Bools for T {
     fn get_bool(&mut self) -> bool {
         self.get_u8() != 0
     }
+}
 
+impl<T: BufMut> BoolsMut for T {
     fn put_bool(&mut self, val: bool) {
         self.put_u8(if val { 1 } else { 0 });
     }

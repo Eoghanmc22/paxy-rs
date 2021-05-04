@@ -1,6 +1,6 @@
 use crate::packets::Packet;
-use bytes::{BytesMut, BufMut, Buf};
-use crate::utils::{VarInts, Bools};
+use bytes::{BufMut, Buf};
+use crate::utils::{VarInts, Bools, VarIntsMut, BoolsMut};
 use std::any::Any;
 
 pub struct EntityPositionPacket {
@@ -11,7 +11,7 @@ pub struct EntityPositionPacket {
     pub on_ground: bool
 }
 impl Packet for EntityPositionPacket {
-    fn read(buffer: &mut BytesMut) -> Self {
+    fn read(mut buffer: &mut dyn Buf) -> Self {
         let entity_id = buffer.get_var_i32().0;
         let delta_x = buffer.get_i16();
         let delta_y = buffer.get_i16();
@@ -26,7 +26,7 @@ impl Packet for EntityPositionPacket {
         }
     }
 
-    fn write(&self, buffer: &mut BytesMut) {
+    fn write(&self, mut buffer: &mut dyn BufMut) {
         buffer.put_var_i32(self.entity_id);
         buffer.put_i16(self.delta_x);
         buffer.put_i16(self.delta_y);

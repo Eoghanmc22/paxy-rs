@@ -1,22 +1,22 @@
 use crate::packets::Packet;
 use std::collections::HashMap;
-use bytes::BytesMut;
+use bytes::Buf;
 
 //represents a packet that is decompressed, decrypted, and has a known id
-pub struct UnparsedPacket {
+pub struct UnparsedPacket<T: Buf> {
     id: i32,
-    buf: BytesMut
+    buf: T
 }
 
-impl UnparsedPacket {
-    pub fn new(id: i32, buf: BytesMut) -> UnparsedPacket {
+impl<T: Buf> UnparsedPacket<T> {
+    pub fn new(id: i32, buf: T) -> UnparsedPacket<T> {
         UnparsedPacket { id, buf }
     }
 }
 
 pub struct HandlingContext {
-    inbound_packets: HashMap<i32, Box<dyn Fn(&mut BytesMut) -> Box<dyn Packet> + Send + Sync>>,
-    outbound_packets: HashMap<i32, Box<dyn Fn(&mut BytesMut) -> Box<dyn Packet> + Send + Sync>>,
+    inbound_packets: HashMap<i32, Box<dyn Fn(&mut dyn Buf) -> Box<dyn Packet> + Send + Sync>>,
+    outbound_packets: HashMap<i32, Box<dyn Fn(&mut dyn Buf) -> Box<dyn Packet> + Send + Sync>>,
 
     inbound_transformers: HashMap<i32, Vec<Box<dyn Fn(&mut dyn Packet) + Send + Sync>>>,
     outbound_transformers: HashMap<i32, Vec<Box<dyn Fn(&mut dyn Packet) + Send + Sync>>>,
@@ -32,14 +32,14 @@ impl HandlingContext {
         }
     }
 
-    pub fn handle_inbound_packet(&self, mut packet: UnparsedPacket) -> BytesMut {
+    pub fn handle_inbound_packet(&self, mut packet: UnparsedPacket<&[u8]>) -> Option<Vec<u8>> {
         let id = packet.id;
         let packet_supplier = if let Some(t) = self.inbound_packets.get(&id) {
             t
-        } else { return packet.buf; };
+        } else { return None; };
         let transformers = if let Some(t) = self.inbound_transformers.get(&id) {
             t
-        } else { return packet.buf; };
+        } else { return None; };
 
         let mut packet: Box<dyn Packet> = packet_supplier(&mut packet.buf);
 
@@ -47,20 +47,20 @@ impl HandlingContext {
             transformer(&mut *packet);
         }
 
-        let mut buffer = BytesMut::new();
+        let mut buffer: Vec<u8> = Vec::new();
         packet.write(&mut buffer);
 
-        buffer
+        Some(buffer)
     }
 
-    pub fn handle_outbound_packet(&self, mut packet: UnparsedPacket) -> BytesMut {
+    pub fn handle_outbound_packet(&self, mut packet: UnparsedPacket<&[u8]>) -> Option<Vec<u8>> {
         let id = packet.id;
         let packet_supplier = if let Some(t) = self.outbound_packets.get(&id) {
             t
-        } else { return packet.buf; };
+        } else { return None; };
         let transformers = if let Some(t) = self.outbound_transformers.get(&id) {
             t
-        } else { return packet.buf; };
+        } else { return None; };
 
         let mut packet: Box<dyn Packet> = packet_supplier(&mut packet.buf);
 
@@ -68,13 +68,13 @@ impl HandlingContext {
             transformer(&mut *packet);
         }
 
-        let mut buffer = BytesMut::new();
+        let mut buffer: Vec<u8> = Vec::new();
         packet.write(&mut buffer);
 
-        buffer
+        Some(buffer)
     }
 
-    pub fn register_inbound_packet_supplier<P: Packet, F: 'static + Fn(&mut BytesMut) -> P + Send + Sync>(&mut self, transformer: F) {
+    pub fn register_inbound_packet_supplier<P: Packet, F: 'static + Fn(&mut dyn Buf) -> P + Send + Sync>(&mut self, transformer: F) {
         if !P::is_inbound() {
             panic!("bad inbound_packet_supplier");
         }
@@ -82,7 +82,7 @@ impl HandlingContext {
         self.inbound_packets.insert(packet_id, Box::new(move |buf| Box::new(transformer(buf))));
     }
 
-    pub fn register_outbound_packet_supplier<P: Packet, F: 'static + Fn(&mut BytesMut) -> Box<P> + Send + Sync>(&mut self, transformer: F) {
+    pub fn register_outbound_packet_supplier<P: Packet, F: 'static + Fn(&mut dyn Buf) -> Box<P> + Send + Sync>(&mut self, transformer: F) {
         if P::is_inbound() {
             panic!("bad outbound_packet_supplier");
         }
