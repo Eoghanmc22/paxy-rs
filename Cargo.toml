@@ -7,5 +7,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1.5.0", features = ["full"] }
+mio = { version = "0.7.11", features = ["os-poll", "net"] }
+flate2 = { version = "1.0.19", features = ["zlib"], default-features = false }
+num_cpus = "1.13.0"
 bytes = "1.0.1"
