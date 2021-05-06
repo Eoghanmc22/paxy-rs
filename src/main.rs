@@ -17,6 +17,8 @@ use std::time::Duration;
 use std::io::{Read, ErrorKind, Write};
 use bytes::{BufMut, Buf};
 use bytes::buf::UninitSlice;
+use crate::packets::s2c::EntityPositionPacket;
+use crate::packets::Packet;
 
 pub enum Message {
     Threads(Arc<Vec<Arc<PaxyThread>>>),
@@ -49,14 +51,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut listener = TcpListener::bind(proxy_address)?;
 
-    let mut handler_context = HandlingContext::new();/*
+    let mut handler_context = HandlingContext::new();
     handler_context.register_outbound_packet_supplier(|buf| {
         Box::new(EntityPositionPacket::read(buf))
     });
-    handler_context.register_outbound_transformer(|packet: &mut EntityPositionPacket| {
+    handler_context.register_outbound_transformer(|_thread_ctx, _connection_ctx, packet: &mut EntityPositionPacket| {
         packet.delta_x = 0;
         packet.delta_y = 100;
-    });*/
+    });
     let handler_context = Arc::new(handler_context);
 
     let thread_count = num_cpus::get() * 2;
@@ -202,6 +204,8 @@ fn forward_data(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usize)
     set_vec_len(&mut packet_buf.vec, 2048);
     let mut uncompressed_buf = IndexedVec::new();
     set_vec_len(&mut uncompressed_buf.vec, 2048);
+    let mut caching_buf = IndexedVec::new();
+    set_vec_len(&mut caching_buf.vec, 2048);
 
     let mut id_counter = 0;
 
@@ -215,7 +219,7 @@ fn forward_data(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usize)
                 }
                 if event.is_readable() {
                     let mut other = thread_ctx.connections.remove(&player.token_other).unwrap();
-                    process_read(&thread_ctx, &mut player, &mut other, &mut packet_buf, &mut uncompressed_buf, handler.clone());
+                    process_read(&thread_ctx, &mut player, &mut other, &mut packet_buf, &mut uncompressed_buf, &mut caching_buf, handler.clone());
 
                     thread_ctx.connections.insert(player.token_other.clone(), other);
                 }
@@ -352,6 +356,39 @@ unsafe impl BufMut for IndexedVec<u8> {
         let ptr = self.vec.as_mut_ptr();
         unsafe { &mut UninitSlice::from_raw_parts_mut(ptr, cap)[len..] }
     }
+
+    fn put_slice(&mut self, src: &[u8]) {
+        self.ensure_writable(src.len());
+
+        // default impl
+        {
+            let mut off = 0;
+
+            assert!(
+                self.remaining_mut() >= src.len(),
+                "buffer overflow; remaining = {}; src = {}",
+                self.remaining_mut(),
+                src.len()
+            );
+
+            while off < src.len() {
+                let cnt;
+
+                unsafe {
+                    let dst = self.chunk_mut();
+                    cnt = std::cmp::min(dst.len(), src.len() - off);
+
+                    std::ptr::copy_nonoverlapping(src[off..].as_ptr(), dst.as_mut_ptr() as *mut u8, cnt);
+
+                    off += cnt;
+                }
+
+                unsafe {
+                    self.advance_mut(cnt);
+                }
+            }
+        }
+    }
 }
 
 pub fn read_socket(ctx: &mut ConnectionContext, packet: &mut IndexedVec<u8>) -> bool {
@@ -455,27 +492,22 @@ fn write_socket0(stream: &mut TcpStream, packet: &mut IndexedVec<u8>, should_clo
 
 pub fn buffer_read(ctx: &mut ConnectionContext, buffering_buf: &mut IndexedVec<u8>) {
     let slice = &buffering_buf.vec[buffering_buf.get_reader_index()..buffering_buf.get_writer_index()];
-    ctx.read_buffering.ensure_writable(slice.len());
     ctx.read_buffering.put_slice(slice);
 }
 
 pub fn unbuffer_read(ctx: &mut ConnectionContext, buffering_buf: &mut IndexedVec<u8>) {
     let slice = &ctx.read_buffering.vec[ctx.read_buffering.get_reader_index()..ctx.read_buffering.get_writer_index()];
-    buffering_buf.ensure_writable(slice.len());
     buffering_buf.put_slice(slice);
     ctx.read_buffering.reset();
 }
 
 pub fn buffer_write(ctx: &mut ConnectionContext, buffering_buf: &mut IndexedVec<u8>) {
-    println!("buffer_write");
     let slice = &buffering_buf.vec[buffering_buf.get_reader_index()..buffering_buf.get_writer_index()];
-    ctx.write_buffering.ensure_writable(slice.len());
     ctx.write_buffering.put_slice(slice);
 }
 
 pub fn buffer_write_slice(ctx: &mut ConnectionContext, buffering_buf: &[u8], start: usize) {
     let slice = &buffering_buf[start..];
-    ctx.write_buffering.ensure_writable(slice.len());
     ctx.write_buffering.put_slice(slice);
 }
 
@@ -483,6 +515,11 @@ pub fn unbuffer_write(ctx: &mut ConnectionContext, buffering_buf: &mut IndexedVe
     let slice = &ctx.write_buffering.vec[ctx.write_buffering.get_reader_index()..ctx.write_buffering.get_writer_index()];
     buffering_buf.put_slice(slice);
     ctx.write_buffering.reset();
+}
+
+pub fn write_slice(to: &mut IndexedVec<u8>, from: &[u8]) {
+    let slice = &from[..];
+    to.put_slice(slice);
 }
 
 // write buffered data
@@ -496,10 +533,12 @@ fn process_write(ctx: &mut ConnectionContext) {
 // todo handle protocol state switching. right now we only check packet ids
 // todo handle encryption
 // todo handle compression
-fn process_read(thread_ctx: &NetworkThreadContext, connection_ctx: &mut ConnectionContext, other_ctx: &mut ConnectionContext, read_buf: &mut IndexedVec<u8>, compression_buf: &mut IndexedVec<u8>, handler: Arc<HandlingContext>) {
+fn process_read(thread_ctx: &NetworkThreadContext, connection_ctx: &mut ConnectionContext, other_ctx: &mut ConnectionContext, read_buf: &mut IndexedVec<u8>, compression_buf: &mut IndexedVec<u8>, caching_buf: &mut IndexedVec<u8>, handler: Arc<HandlingContext>) {
     let mut pointer = 0;
     let mut next;
     read_buf.reset();
+    compression_buf.reset();
+    caching_buf.reset();
 
     //read new packets
     unbuffer_read(connection_ctx, read_buf);
@@ -544,13 +583,14 @@ fn process_read(thread_ctx: &NetworkThreadContext, connection_ctx: &mut Connecti
 
                 if let Some(mut buffer) = optional_processed_buf {
                     // write in 2 steps to avoid extra copy
-                    write_socket_slice(other_ctx, &read_buf.vec[pointer..pointer+(bytes+id_bytes) as usize]);
-                    write_socket(other_ctx, &mut buffer);
+                    write_slice(caching_buf, &read_buf.vec[pointer..pointer+(bytes+id_bytes) as usize]);
+                    write_slice(caching_buf, &buffer.vec[buffer.get_reader_index()..buffer.get_writer_index()]);
                 } else {
-                    write_socket_slice(other_ctx, &read_buf.vec[pointer..next]);
+                    write_slice(caching_buf, &read_buf.vec[pointer..next]);
                 }
 
                 if connection_ctx.should_close {
+                    write_socket(connection_ctx, caching_buf);
                     return;
                 }
 
@@ -563,6 +603,7 @@ fn process_read(thread_ctx: &NetworkThreadContext, connection_ctx: &mut Connecti
     }
 
     buffer_read(connection_ctx, read_buf);
+    write_socket(other_ctx, caching_buf);
 }
 
 fn validate_small_frame(buf: &mut IndexedVec<u8>, pointer: usize, len: usize) -> bool {
