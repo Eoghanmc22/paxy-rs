@@ -6,10 +6,10 @@ use crate::contexts::{ConnectionContext, NetworkThreadContext};
 use crate::packets::Packet;
 use crate::utils::IndexedVec;
 
-//represents a packet that is decompressed, decrypted, and has a known id
+/// Represents a packet that is decompressed, decrypted, and has a known id.
 pub struct UnparsedPacket<T: Buf> {
     id: i32,
-    buf: T
+    buf: T,
 }
 
 impl<T: Buf> UnparsedPacket<T> {
@@ -18,6 +18,7 @@ impl<T: Buf> UnparsedPacket<T> {
     }
 }
 
+/// Contains protocol mapping.
 pub struct HandlingContext {
     inbound_packets: HashMap<i32, Box<dyn Fn(&mut dyn Buf) -> Box<dyn Packet> + Send + Sync>>,
     outbound_packets: HashMap<i32, Box<dyn Fn(&mut dyn Buf) -> Box<dyn Packet> + Send + Sync>>,
@@ -32,7 +33,7 @@ impl HandlingContext {
             inbound_packets: HashMap::new(),
             outbound_packets: HashMap::new(),
             inbound_transformers: HashMap::new(),
-            outbound_transformers: HashMap::new()
+            outbound_transformers: HashMap::new(),
         }
     }
 
@@ -90,7 +91,7 @@ impl HandlingContext {
     pub fn register_transformer<P: Packet, F: 'static + Fn(&NetworkThreadContext, &mut ConnectionContext, &mut P) + Send + Sync>(&mut self, transformer: F) {
         let packet_id = P::get_id();
 
-        let transformer : Box<dyn Fn(&NetworkThreadContext, &mut ConnectionContext, &mut dyn Packet) + Send + Sync> = Box::new(move |thread_ctx, connection_ctx, packet| {
+        let transformer: Box<dyn Fn(&NetworkThreadContext, &mut ConnectionContext, &mut dyn Packet) + Send + Sync> = Box::new(move |thread_ctx, connection_ctx, packet| {
             let any_packet = packet.as_any();
             if let Some(casted_packet) = any_packet.downcast_mut() {
                 transformer(thread_ctx, connection_ctx, casted_packet)

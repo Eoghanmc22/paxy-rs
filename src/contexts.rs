@@ -12,7 +12,7 @@ use crate::utils::IndexedVec;
 
 pub struct PaxyThread {
     thread: JoinHandle<()>,
-    channel: SyncSender<Message>
+    channel: SyncSender<Message>,
 }
 
 impl PaxyThread {
@@ -30,13 +30,15 @@ impl PaxyThread {
     }
 }
 
+/// Context linked to a TCP connection.
+/// Used to store its state, and ensure that packets are parsed the right way.
 pub struct ConnectionContext {
-    pub token_self : Token,
-    pub token_other : Token,
-    pub stream : TcpStream,
+    pub token_self: Token,
+    pub token_other: Token,
+    pub stream: TcpStream,
     pub compression_threshold: i32,
     pub state: u8,
-    pub should_close : bool,
+    pub should_close: bool,
     pub read_buffering: IndexedVec<u8>,
     pub write_buffering: IndexedVec<u8>,
     pub is_writable: bool,
@@ -45,8 +47,8 @@ pub struct ConnectionContext {
 
 impl ConnectionContext {
     pub fn create_pair(id: usize, mut c2s: TcpStream, mut s2c: TcpStream, poll: &Poll, connections: &mut HashMap<Token, ConnectionContext>) {
-        let c2s_token = Token(id*2);
-        let s2c_token = Token(id*2+1);
+        let c2s_token = Token(id * 2);
+        let s2c_token = Token(id * 2 + 1);
         let registry = poll.registry();
         registry.register(&mut c2s, c2s_token, Interest::READABLE | Interest::WRITABLE).unwrap();
         registry.register(&mut s2c, s2c_token, Interest::READABLE | Interest::WRITABLE).unwrap();
@@ -60,7 +62,7 @@ impl ConnectionContext {
             read_buffering: IndexedVec::new(),
             write_buffering: IndexedVec::new(),
             is_writable: true,
-            inbound: true
+            inbound: true,
         };
         let s2c_context = ConnectionContext {
             token_self: s2c_token,
@@ -72,7 +74,7 @@ impl ConnectionContext {
             read_buffering: IndexedVec::new(),
             write_buffering: IndexedVec::new(),
             is_writable: true,
-            inbound: false
+            inbound: false,
         };
         connections.insert(c2s_token, c2s_context);
         connections.insert(s2c_token, s2c_context);
@@ -83,13 +85,18 @@ impl ConnectionContext {
     }
 }
 
+/// Context linked to a single networking thread.
+/// Stores all the connections and their tokens
 pub struct NetworkThreadContext {
     pub connections: HashMap<Token, ConnectionContext>,
     pub threads: Arc<Vec<Arc<PaxyThread>>>,
-    pub thread: Arc<PaxyThread>
+    pub thread: Arc<PaxyThread>,
 }
 
+/// Represents a message sent to a [`NetworkThreadContext`].
 pub enum Message {
     Threads(Arc<Vec<Arc<PaxyThread>>>),
-    NewConnection(TcpStream, TcpStream)
+
+    /// New connection should be processed in the receiving thread.
+    NewConnection(TcpStream, TcpStream),
 }
