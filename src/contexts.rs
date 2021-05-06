@@ -20,7 +20,7 @@ impl PaxyThread {
         // todo adjust? this prob isnt enough
         let (tx, rx) = sync::mpsc::sync_channel(1000);
         let thread = thread::spawn(move || {
-            crate::packets::networking::forward_data(rx, handler, id);
+            crate::packets::networking::thread_loop(rx, handler, id);
         });
         PaxyThread { thread, channel: tx }
     }

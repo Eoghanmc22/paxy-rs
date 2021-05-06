@@ -11,20 +11,25 @@ use crate::packets::handling::{HandlingContext, UnparsedPacket};
 use crate::utils::{IndexedVec, VarInts};
 use crate::utils;
 
-pub fn forward_data(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usize) {
+/// Start network thread loop.
+/// Responsible for parsing and transforming every out/incoming packets.
+pub fn thread_loop(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usize) {
+    // Create thread context
     let mut thread_ctx = {
         let connections = HashMap::new();
         let threads = match rx.recv().unwrap() {
             Threads(threads) => {
                 threads
-            },
+            }
             _ => panic!("unexpected message")
         };
 
         let thread = threads[id].clone();
 
         NetworkThreadContext {
-            connections, threads, thread
+            connections,
+            threads,
+            thread,
         }
     };
 
@@ -46,10 +51,11 @@ pub fn forward_data(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: us
 
     let mut id_counter = 0;
 
+    // Start parsing loop
     loop {
         poll.poll(&mut events, Some(dur)).expect("couldn't poll");
         for event in events.iter() {
-            // I used remove to get around the borrow checker hopefully there is a better way. also i assume this is slower.
+            // FIXME: I used remove to get around the borrow checker hopefully there is a better way. also i assume this is slower.
             if let Some(mut player) = thread_ctx.connections.remove(&event.token()) {
                 if event.is_writable() {
                     process_write(&mut player);
@@ -62,6 +68,7 @@ pub fn forward_data(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: us
                 }
 
                 if player.should_close {
+                    // Connection socket is not active anymore, remove context
                     thread_ctx.connections.remove(&player.token_other);
                     continue;
                 }
@@ -69,15 +76,18 @@ pub fn forward_data(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: us
                 thread_ctx.connections.insert(player.token_self.clone(), player);
             }
         }
+
+        // Process all incoming messages
         for msg in rx.try_iter() {
             match msg {
                 NewConnection(c2s, s2c) => {
-                    println!("connect player");
-                    // connect player
+                    // New connection has been associated to this thread
+                    println!("Player connection");
+                    // Create connection context
                     ConnectionContext::create_pair(id_counter, c2s, s2c, &poll, &mut thread_ctx.connections);
                     id_counter += 1;
                 }
-                _ => { println!("got unexpected message");}
+                _ => { println!("got unexpected message"); }
             }
         }
     }
@@ -94,14 +104,21 @@ fn process_write(ctx: &mut ConnectionContext) {
 // todo handle protocol state switching. right now we only check packet ids
 // todo handle encryption
 // todo handle compression
-fn process_read(thread_ctx: &NetworkThreadContext, connection_ctx: &mut ConnectionContext, other_ctx: &mut ConnectionContext, read_buf: &mut IndexedVec<u8>, compression_buf: &mut IndexedVec<u8>, caching_buf: &mut IndexedVec<u8>, handler: Arc<HandlingContext>) {
+fn process_read(thread_ctx: &NetworkThreadContext,
+                connection_ctx: &mut ConnectionContext,
+                other_ctx: &mut ConnectionContext,
+                read_buf: &mut IndexedVec<u8>,
+                compression_buf: &mut IndexedVec<u8>,
+                caching_buf: &mut IndexedVec<u8>,
+                handler: Arc<HandlingContext>) {
+
     let mut pointer = 0;
     let mut next;
     read_buf.reset();
     compression_buf.reset();
     caching_buf.reset();
 
-    //read new packets
+    // read new packets
     utils::unbuffer_read(connection_ctx, read_buf);
     while utils::read_socket(connection_ctx, read_buf) {
         if connection_ctx.should_close {
@@ -144,7 +161,7 @@ fn process_read(thread_ctx: &NetworkThreadContext, connection_ctx: &mut Connecti
 
                 if let Some(buffer) = optional_processed_buf {
                     // write in 2 steps to avoid extra copy
-                    utils::write_slice(caching_buf, &read_buf.vec[pointer..pointer+(bytes+id_bytes) as usize]);
+                    utils::write_slice(caching_buf, &read_buf.vec[pointer..pointer + (bytes + id_bytes) as usize]);
                     utils::write_slice(caching_buf, &buffer.vec[buffer.get_reader_index()..buffer.get_writer_index()]);
                 } else {
                     utils::write_slice(caching_buf, &read_buf.vec[pointer..next]);
