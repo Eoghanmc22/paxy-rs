@@ -85,10 +85,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         poll.poll(&mut events, None).expect("couldn't poll");
         for event in events.iter() {
             if event.token() == listener_token {
-                let (client_socket, _) = listener.accept()?;
-                threads[next_thread].notify(NewConnection(client_socket, TcpStream::connect(server_address)?))?;
-                next_thread += 1;
-                next_thread %= thread_count;
+                loop {
+                    if let Ok((client_socket, _)) = listener.accept() {
+                        threads[next_thread].notify(NewConnection(client_socket, TcpStream::connect(server_address)?))?;
+                        next_thread += 1;
+                        next_thread %= thread_count;
+                    } else {
+                        break;
+                    }
+                }
             }
         }
     }
@@ -220,6 +225,7 @@ fn forward_data(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usize)
         for msg in rx.try_iter() {
             match msg {
                 NewConnection(c2s, s2c) => {
+                    println!("connect player");
                     // connect player
                     ConnectionContext::create_pair(id_counter, c2s, s2c, &poll, &mut thread_ctx.connections);
                     id_counter += 1;
