@@ -451,7 +451,6 @@ pub fn buffer_write(ctx: &mut ConnectionContext, buffering_buf: &mut IndexedVec<
 }
 
 pub fn buffer_write_slice(ctx: &mut ConnectionContext, buffering_buf: &[u8], start: usize) {
-    println!("buffer_write_slice");
     let slice = &buffering_buf[start..];
     ctx.write_buffering.ensure_writable(slice.len());
     ctx.write_buffering.put_slice(slice);
