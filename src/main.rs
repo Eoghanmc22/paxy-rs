@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proxy_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 25566);
     let server_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 25565);
 
-    let listener = TcpListener::bind(proxy_address)?;
+    let mut listener = TcpListener::bind(proxy_address)?;
 
     let mut handler_context = HandlingContext::new();/*
     handler_context.register_outbound_packet_supplier(|buf| {
@@ -74,12 +74,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut next_thread = 0usize;
 
+    let mut events = Events::with_capacity(128);
+    let mut poll = Poll::new().expect("could not unwrap poll");
+
+    let listener_token = Token(0);
+    poll.registry().register(&mut listener, listener_token, Interest::READABLE).unwrap();
+
     // handles accepting connections and messages a thread about it
     loop {
-        let (client_socket, _) = listener.accept()?;
-        threads[next_thread].notify(NewConnection(client_socket, TcpStream::connect(server_address)?))?;
-        next_thread += 1;
-        next_thread %= thread_count;
+        poll.poll(&mut events, None).expect("couldn't poll");
+        for event in events.iter() {
+            if event.token() == listener_token {
+                let (client_socket, _) = listener.accept()?;
+                threads[next_thread].notify(NewConnection(client_socket, TcpStream::connect(server_address)?))?;
+                next_thread += 1;
+                next_thread %= thread_count;
+            }
+        }
     }
 }
 
@@ -187,6 +198,8 @@ fn forward_data(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usize)
     let mut uncompressed_buf = IndexedVec::new();
     set_vec_len(&mut uncompressed_buf.vec, 2048);
 
+    let mut id_counter = 0;
+
     loop {
         poll.poll(&mut events, Some(dur)).expect("couldn't poll");
         for event in events.iter() {
@@ -199,17 +212,25 @@ fn forward_data(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usize)
                     let mut other = thread_ctx.connections.remove(&player.token_other).unwrap();
                     process_read(&thread_ctx, &mut player, &mut other, &mut packet_buf, &mut uncompressed_buf, handler.clone());
 
-                    let token_other = player.token_self.clone();
-
-                    thread_ctx.connections.insert(token_other, other);
+                    thread_ctx.connections.insert(player.token_other.clone(), other);
                 }
-                let token_main = player.token_self.clone();
-                thread_ctx.connections.insert(token_main, player);
+                thread_ctx.connections.insert(player.token_self.clone(), player);
+            }
+        }
+        for msg in rx.try_iter() {
+            match msg {
+                NewConnection(c2s, s2c) => {
+                    // connect player
+                    ConnectionContext::create_pair(id_counter, c2s, s2c, &poll, &mut thread_ctx.connections);
+                    id_counter += 1;
+                }
+                _ => { println!("got unexpected message");}
             }
         }
     }
 }
 
+#[derive(Debug)]
 pub struct IndexedVec<T> {
     pub vec: Vec<T>,
     writer_index: usize,
@@ -246,7 +267,7 @@ impl<T> IndexedVec<T> {
     }
 
     pub fn set_reader_index(&mut self, writer_index: usize) {
-        self.writer_index = writer_index;
+        self.reader_index = writer_index;
     }
 
     pub fn advance_writer_index(&mut self, distance: usize) {
@@ -254,7 +275,7 @@ impl<T> IndexedVec<T> {
     }
 
     pub fn advance_reader_index(&mut self, distance: usize) {
-        self.writer_index += distance;
+        self.reader_index += distance;
     }
 
     pub fn reset(&mut self) {
@@ -268,6 +289,14 @@ impl<T> IndexedVec<T> {
 
     pub fn reset_writer(&mut self) {
         self.writer_index = 0;
+    }
+
+    pub fn ensure_writable(&mut self, extra: usize) {
+        let remaining = self.vec.len() - self.get_writer_index();
+        if remaining < extra {
+            let needed = extra - remaining;
+            set_vec_len(&mut self.vec, needed);
+        }
     }
 }
 
@@ -295,7 +324,7 @@ unsafe impl BufMut for IndexedVec<u8> {
 
     unsafe fn advance_mut(&mut self, cnt: usize) {
         self.advance_writer_index(cnt);
-        if self.get_writer_index() >= self.vec.len() {
+        if self.get_writer_index() > self.vec.len() {
             panic!("no more space, writer_index: {} cnt: {}, len: {}", self.get_writer_index()-cnt, cnt, self.vec.len())
         }
     }
@@ -361,7 +390,7 @@ pub fn write_socket_slice(ctx: &mut ConnectionContext, packet: &[u8]) {
                             break;
                         }
                         _ => {
-                            panic!("unable to read socket: {:?}", e)
+                            panic!("unable to write socket: {:?}", e)
                         }
                     }
                 }
@@ -389,7 +418,7 @@ fn write_socket0(stream: &mut TcpStream, packet: &mut IndexedVec<u8>) -> bool {
                         return false;
                     }
                     _ => {
-                        panic!("unable to read socket: {:?}", e)
+                        panic!("unable to write socket: {:?}", e)
                     }
                 }
             }
@@ -402,21 +431,30 @@ fn write_socket0(stream: &mut TcpStream, packet: &mut IndexedVec<u8>) -> bool {
 }
 
 pub fn buffer_read(ctx: &mut ConnectionContext, buffering_buf: &mut IndexedVec<u8>) {
-    ctx.read_buffering.put_slice(&buffering_buf.vec[buffering_buf.get_reader_index()..buffering_buf.get_writer_index()]);
+    let slice = &buffering_buf.vec[buffering_buf.get_reader_index()..buffering_buf.get_writer_index()];
+    ctx.read_buffering.ensure_writable(slice.len());
+    ctx.read_buffering.put_slice(slice);
 }
 
 pub fn unbuffer_read(ctx: &mut ConnectionContext, buffering_buf: &mut IndexedVec<u8>) {
     let slice = &ctx.read_buffering.vec[ctx.read_buffering.get_reader_index()..ctx.read_buffering.get_writer_index()];
+    buffering_buf.ensure_writable(slice.len());
     buffering_buf.put_slice(slice);
     ctx.read_buffering.reset();
 }
 
 pub fn buffer_write(ctx: &mut ConnectionContext, buffering_buf: &mut IndexedVec<u8>) {
-    ctx.write_buffering.put_slice(&buffering_buf.vec[buffering_buf.get_reader_index()..buffering_buf.get_writer_index()]);
+    println!("buffer_write");
+    let slice = &buffering_buf.vec[buffering_buf.get_reader_index()..buffering_buf.get_writer_index()];
+    ctx.write_buffering.ensure_writable(slice.len());
+    ctx.write_buffering.put_slice(slice);
 }
 
 pub fn buffer_write_slice(ctx: &mut ConnectionContext, buffering_buf: &[u8], start: usize) {
-    ctx.write_buffering.put_slice(&buffering_buf[start..]);
+    println!("buffer_write_slice");
+    let slice = &buffering_buf[start..];
+    ctx.write_buffering.ensure_writable(slice.len());
+    ctx.write_buffering.put_slice(slice);
 }
 
 pub fn unbuffer_write(ctx: &mut ConnectionContext, buffering_buf: &mut IndexedVec<u8>) {
@@ -464,7 +502,6 @@ fn process_read(thread_ctx: &NetworkThreadContext, connection_ctx: &mut Connecti
         if len - pointer < 3 && !validate_small_frame(read_buf, pointer, len) {
             break;
         }
-        // this does a copy which isnt to optimal. really we want to create a mutable view
         let mut working_buf = &read_buf.vec[pointer..];
 
         if let Some((packet_len, bytes)) = working_buf.get_var_i32_limit(3) {
@@ -488,7 +525,9 @@ fn process_read(thread_ctx: &NetworkThreadContext, connection_ctx: &mut Connecti
                 } else {
                     write_socket_slice(other_ctx, &read_buf.vec[pointer..next]);
                 }
+
                 pointer = next;
+                read_buf.set_reader_index(pointer);
             } else {
                 break;
             }
