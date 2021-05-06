@@ -4,7 +4,7 @@ use std::sync::Arc;
 use mio::{Events, Interest, Poll, Token};
 use mio::net::{TcpListener, TcpStream};
 
-use contexts::{PaxyThread};
+use contexts::PaxyThread;
 use contexts::Message::{NewConnection, Threads};
 
 use crate::packets::handling::HandlingContext;
@@ -33,20 +33,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proxy_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 25566);
     let server_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 25565);
 
+    // Create TCP server
     let mut listener = TcpListener::bind(proxy_address)?;
 
+    // Registering
     let mut handler_context = HandlingContext::new();
     register_packet_suppliers(&mut handler_context);
     register_transformers(&mut handler_context);
     let handler_context = Arc::new(handler_context);
 
+    // Setup network threads
     let thread_count = num_cpus::get() * 2;
     let mut threads = Vec::with_capacity(thread_count);
     for thread in 0..thread_count {
         let paxy_thread = PaxyThread::spawn(handler_context.clone(), thread);
         threads.push(Arc::new(paxy_thread));
     }
-    // Finalize the threads list
+    // Finalize the thread list
     let threads = Arc::new(threads);
 
     for thread in threads.iter() {
@@ -68,6 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if event.token() == listener_token {
                 loop {
                     if let Ok((client_socket, _)) = listener.accept() {
+                        // New client, bind it to a thread
                         threads[next_thread].notify(NewConnection(client_socket, TcpStream::connect(server_address)?))?;
                         next_thread += 1;
                         next_thread %= thread_count;
