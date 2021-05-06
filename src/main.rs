@@ -219,6 +219,12 @@ fn forward_data(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usize)
 
                     thread_ctx.connections.insert(player.token_other.clone(), other);
                 }
+
+                if player.should_close {
+                    thread_ctx.connections.remove(&player.token_other);
+                    continue;
+                }
+
                 thread_ctx.connections.insert(player.token_self.clone(), player);
             }
         }
@@ -354,13 +360,20 @@ pub fn read_socket(ctx: &mut ConnectionContext, packet: &mut IndexedVec<u8>) -> 
     match result {
         Ok(read) => {
             packet.advance_writer_index(read);
+            if read == 0 && packet.vec.len() > packet.get_writer_index() {
+                println!("read 0");
+                ctx.should_close = true;
+                return true;
+            }
             true
         }
         Err(e) => {
             match e.kind() {
                 ErrorKind::WouldBlock => {}
                 _ => {
-                    panic!("unable to read socket: {:?}", e)
+                    println!("unable to read socket: {:?}", e);
+                    ctx.should_close = true;
+                    return true;
                 }
             }
             false
@@ -370,7 +383,7 @@ pub fn read_socket(ctx: &mut ConnectionContext, packet: &mut IndexedVec<u8>) -> 
 
 pub fn write_socket(ctx: &mut ConnectionContext, packet: &mut IndexedVec<u8>) {
     if ctx.is_writable {
-        if !write_socket0(&mut ctx.stream, packet) {
+        if !write_socket0(&mut ctx.stream, packet, &mut ctx.should_close) {
             buffer_write(ctx, packet);
             ctx.is_writable = false;
         }
@@ -396,7 +409,9 @@ pub fn write_socket_slice(ctx: &mut ConnectionContext, packet: &[u8]) {
                             break;
                         }
                         _ => {
-                            panic!("unable to write socket: {:?}", e)
+                            println!("unable to write socket: {:?}", e);
+                            ctx.should_close = true;
+                            return;
                         }
                     }
                 }
@@ -410,7 +425,7 @@ pub fn write_socket_slice(ctx: &mut ConnectionContext, packet: &[u8]) {
     }
 }
 
-fn write_socket0(stream: &mut TcpStream, packet: &mut IndexedVec<u8>) -> bool {
+fn write_socket0(stream: &mut TcpStream, packet: &mut IndexedVec<u8>, should_close: &mut bool) -> bool {
     loop {
         let range = packet.get_reader_index()..packet.get_writer_index();
         let result = stream.write(&mut packet.vec[range]);
@@ -424,7 +439,9 @@ fn write_socket0(stream: &mut TcpStream, packet: &mut IndexedVec<u8>) -> bool {
                         return false;
                     }
                     _ => {
-                        panic!("unable to write socket: {:?}", e)
+                        println!("unable to write socket: {:?}", e);
+                        *should_close = true;
+                        return true;
                     }
                 }
             }
@@ -471,7 +488,7 @@ pub fn unbuffer_write(ctx: &mut ConnectionContext, buffering_buf: &mut IndexedVe
 // write buffered data
 fn process_write(ctx: &mut ConnectionContext) {
     ctx.is_writable = true;
-    if !write_socket0(&mut ctx.stream, &mut ctx.write_buffering) {
+    if !write_socket0(&mut ctx.stream, &mut ctx.write_buffering, &mut ctx.should_close) {
         ctx.is_writable = false;
     }
 }
@@ -487,8 +504,7 @@ fn process_read(thread_ctx: &NetworkThreadContext, connection_ctx: &mut Connecti
     //read new packets
     unbuffer_read(connection_ctx, read_buf);
     while read_socket(connection_ctx, read_buf) {
-        if read_buf.get_writer_index() == 0 {
-            connection_ctx.should_close = true;
+        if connection_ctx.should_close {
             return;
         }
         if read_buf.get_writer_index() == read_buf.vec.len() {
@@ -498,6 +514,9 @@ fn process_read(thread_ctx: &NetworkThreadContext, connection_ctx: &mut Connecti
         } else {
             break;
         }
+    }
+    if connection_ctx.should_close {
+        return;
     }
 
     let len = read_buf.get_writer_index();
@@ -529,6 +548,10 @@ fn process_read(thread_ctx: &NetworkThreadContext, connection_ctx: &mut Connecti
                     write_socket(other_ctx, &mut buffer);
                 } else {
                     write_socket_slice(other_ctx, &read_buf.vec[pointer..next]);
+                }
+
+                if connection_ctx.should_close {
+                    return;
                 }
 
                 pointer = next;
