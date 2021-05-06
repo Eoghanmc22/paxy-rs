@@ -4,6 +4,7 @@ use std::any::Any;
 pub mod handling;
 pub mod c2s;
 pub mod s2c;
+pub(crate) mod networking;
 
 pub trait Packet : Any {
     fn read(buffer: &mut dyn Buf) -> Self where Self: Sized;
