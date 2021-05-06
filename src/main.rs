@@ -1,22 +1,15 @@
-use std::{sync, thread};
-use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, SendError, SyncSender};
-use std::thread::JoinHandle;
-use std::time::Duration;
 
 use mio::{Events, Interest, Poll, Token};
 use mio::net::{TcpListener, TcpStream};
 
-use contexts::{ConnectionContext, Message, NetworkThreadContext, PaxyThread};
+use contexts::{PaxyThread};
 use contexts::Message::{NewConnection, Threads};
-use utils::IndexedVec;
 
-use crate::packets::handling::{HandlingContext, UnparsedPacket};
+use crate::packets::handling::HandlingContext;
 use crate::packets::Packet;
 use crate::packets::s2c::EntityPositionPacket;
-use crate::utils::VarInts;
 
 mod packets;
 mod utils;
@@ -35,6 +28,7 @@ fn register_transformers(handler_context: &mut HandlingContext) {
     });
 }
 
+// TODO add transformer results like Updated, Unchanged, Cancelled
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proxy_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 25566);
     let server_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 25565);
