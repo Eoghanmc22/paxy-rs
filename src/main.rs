@@ -52,13 +52,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut listener = TcpListener::bind(proxy_address)?;
 
     let mut handler_context = HandlingContext::new();
-    handler_context.register_outbound_packet_supplier(|buf| {
+    /*handler_context.register_outbound_packet_supplier(|buf| {
         Box::new(EntityPositionPacket::read(buf))
     });
     handler_context.register_outbound_transformer(|_thread_ctx, _connection_ctx, packet: &mut EntityPositionPacket| {
         packet.delta_x = 0;
         packet.delta_y = 100;
-    });
+    });*/
     let handler_context = Arc::new(handler_context);
 
     let thread_count = num_cpus::get() * 2;
