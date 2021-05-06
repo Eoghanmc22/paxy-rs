@@ -76,9 +76,6 @@ impl HandlingContext {
     }
 
     pub fn register_packet_supplier<P: Packet, F: 'static + Fn(&mut dyn Buf) -> P + Send + Sync>(&mut self, transformer: F) {
-        if !P::is_inbound() {
-            panic!("bad inbound_packet_supplier");
-        }
         let packet_id = P::get_id();
         if P::is_inbound() {
             self.inbound_packets.insert(packet_id, Box::new(move |buf| Box::new(transformer(buf))));
@@ -88,10 +85,8 @@ impl HandlingContext {
     }
 
     pub fn register_transformer<P: Packet, F: 'static + Fn(&NetworkThreadContext, &mut ConnectionContext, &mut P) + Send + Sync>(&mut self, transformer: F) {
-        if !P::is_inbound() {
-            panic!("bad inbound_transformer");
-        }
         let packet_id = P::get_id();
+
         let transformer : Box<dyn Fn(&NetworkThreadContext, &mut ConnectionContext, &mut dyn Packet) + Send + Sync> = Box::new(move |thread_ctx, connection_ctx, packet| {
             let any_packet = packet.as_any();
             if let Some(casted_packet) = any_packet.downcast_mut() {
@@ -100,6 +95,7 @@ impl HandlingContext {
                 println!("couldnt cast, this should never be hit ever");
             }
         });
+
         if P::is_inbound() {
             if let Some(vec) = self.inbound_transformers.get_mut(&packet_id) {
                 vec.push(transformer);
