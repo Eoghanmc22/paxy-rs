@@ -11,6 +11,11 @@ use crate::packets::handling::{HandlingContext, UnparsedPacket};
 use crate::utils::{IndexedVec, VarInts};
 use crate::utils;
 
+pub const HANDSHAKING_STATE: u8 = 0;
+pub const STATUS_STATE: u8 = 1;
+pub const LOGIN_STATE: u8 = 2;
+pub const PLAY_STATE: u8 = 3;
+
 /// Start network thread loop.
 /// Responsible for parsing and transforming every out/incoming packets.
 pub fn thread_loop(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usize) {

@@ -128,6 +128,31 @@ impl<T: BufMut> BoolsMut for T {
     }
 }
 
+pub trait Strings {
+    fn get_string(&mut self) -> String;
+}
+
+pub trait StringsMut {
+    fn put_string(&mut self, string: &str);
+}
+
+impl<T: Buf> Strings for T {
+    fn get_string(&mut self) -> String {
+        let len = self.get_var_i32().0;
+        let mut slice = Vec::new();
+        set_vec_len(&mut slice, len as usize);
+        String::from_utf8_lossy(&slice).to_string()
+    }
+}
+
+impl<T: BufMut> StringsMut for T {
+    fn put_string(&mut self, string: &str) {
+        //String slices are always valid UTF-8
+        self.put_var_i32(string.len() as i32);
+        self.put_slice(string.as_bytes());
+    }
+}
+
 pub fn set_vec_len<T>(vec: &mut Vec<T>, extra_len: usize) {
     vec.reserve(extra_len);
 

@@ -20,29 +20,38 @@ impl<T: Buf> UnparsedPacket<T> {
 
 /// Contains protocol mapping.
 pub struct HandlingContext {
-    inbound_packets: HashMap<i32, Box<dyn Fn(&mut dyn Buf) -> Box<dyn Packet> + Send + Sync>>,
-    outbound_packets: HashMap<i32, Box<dyn Fn(&mut dyn Buf) -> Box<dyn Packet> + Send + Sync>>,
+    inbound_packets: HashMap<u8, HashMap<i32, Box<dyn Fn(&mut dyn Buf) -> Box<dyn Packet> + Send + Sync>>>,
+    outbound_packets: HashMap<u8, HashMap<i32, Box<dyn Fn(&mut dyn Buf) -> Box<dyn Packet> + Send + Sync>>>,
 
-    inbound_transformers: HashMap<i32, Vec<Box<dyn Fn(&NetworkThreadContext, &mut ConnectionContext, &mut dyn Packet) + Send + Sync>>>,
-    outbound_transformers: HashMap<i32, Vec<Box<dyn Fn(&NetworkThreadContext, &mut ConnectionContext, &mut dyn Packet) + Send + Sync>>>,
+    inbound_transformers: HashMap<u8, HashMap<i32, Vec<Box<dyn Fn(&NetworkThreadContext, &mut ConnectionContext, &mut dyn Packet) + Send + Sync>>>>,
+    outbound_transformers: HashMap<u8, HashMap<i32, Vec<Box<dyn Fn(&NetworkThreadContext, &mut ConnectionContext, &mut dyn Packet) + Send + Sync>>>>,
 }
 
 impl HandlingContext {
     pub fn new() -> HandlingContext {
-        HandlingContext {
+        let mut ctx = HandlingContext {
             inbound_packets: HashMap::new(),
             outbound_packets: HashMap::new(),
             inbound_transformers: HashMap::new(),
-            outbound_transformers: HashMap::new(),
+            outbound_transformers: HashMap::new()
+        };
+
+        for state in 0..=3 {
+            ctx.inbound_packets.insert(state, HashMap::new());
+            ctx.outbound_packets.insert(state, HashMap::new());
+            ctx.inbound_transformers.insert(state, HashMap::new());
+            ctx.outbound_transformers.insert(state, HashMap::new());
         }
+
+        ctx
     }
 
     pub fn handle_inbound_packet(&self, thread_ctx: &NetworkThreadContext, connection_ctx: &mut ConnectionContext, mut packet: UnparsedPacket<&[u8]>) -> Option<IndexedVec<u8>> {
         let id = packet.id;
-        let packet_supplier = if let Some(t) = self.inbound_packets.get(&id) {
+        let packet_supplier = if let Some(t) = self.inbound_packets.get(&connection_ctx.state).unwrap().get(&id) {
             t
         } else { return None; };
-        let transformers = if let Some(t) = self.inbound_transformers.get(&id) {
+        let transformers = if let Some(t) = self.inbound_transformers.get(&connection_ctx.state).unwrap().get(&id) {
             t
         } else { return None; };
 
@@ -60,10 +69,10 @@ impl HandlingContext {
 
     pub fn handle_outbound_packet(&self, thread_ctx: &NetworkThreadContext, connection_ctx: &mut ConnectionContext, mut packet: UnparsedPacket<&[u8]>) -> Option<IndexedVec<u8>> {
         let id = packet.id;
-        let packet_supplier = if let Some(t) = self.outbound_packets.get(&id) {
+        let packet_supplier = if let Some(t) = self.outbound_packets.get(&connection_ctx.state).unwrap().get(&id) {
             t
         } else { return None; };
-        let transformers = if let Some(t) = self.outbound_transformers.get(&id) {
+        let transformers = if let Some(t) = self.outbound_transformers.get(&connection_ctx.state).unwrap().get(&id) {
             t
         } else { return None; };
 
@@ -82,16 +91,16 @@ impl HandlingContext {
     pub fn register_packet_supplier<P: Packet, F: 'static + Fn(&mut dyn Buf) -> P + Send + Sync>(&mut self, transformer: F) {
         let packet_id = P::get_id();
         if P::is_inbound() {
-            self.inbound_packets.insert(packet_id, Box::new(move |buf| Box::new(transformer(buf))));
+            self.inbound_packets.get_mut(&P::get_state()).unwrap().insert(packet_id, Box::new(move |buf| Box::new(transformer(buf))));
         } else {
-            self.outbound_packets.insert(packet_id, Box::new(move |buf| Box::new(transformer(buf))));
+            self.outbound_packets.get_mut(&P::get_state()).unwrap().insert(packet_id, Box::new(move |buf| Box::new(transformer(buf))));
         }
     }
 
     pub fn register_transformer<P: Packet, F: 'static + Fn(&NetworkThreadContext, &mut ConnectionContext, &mut P) + Send + Sync>(&mut self, transformer: F) {
         let packet_id = P::get_id();
 
-        let transformer: Box<dyn Fn(&NetworkThreadContext, &mut ConnectionContext, &mut dyn Packet) + Send + Sync> = Box::new(move |thread_ctx, connection_ctx, packet| {
+        let transformer : Box<dyn Fn(&NetworkThreadContext, &mut ConnectionContext, &mut dyn Packet) + Send + Sync> = Box::new(move |thread_ctx, connection_ctx, packet| {
             let any_packet = packet.as_any();
             if let Some(casted_packet) = any_packet.downcast_mut() {
                 transformer(thread_ctx, connection_ctx, casted_packet)
@@ -101,16 +110,16 @@ impl HandlingContext {
         });
 
         if P::is_inbound() {
-            if let Some(vec) = self.inbound_transformers.get_mut(&packet_id) {
+            if let Some(vec) = self.inbound_transformers.get_mut(&P::get_state()).unwrap().get_mut(&packet_id) {
                 vec.push(transformer);
             } else {
-                self.inbound_transformers.insert(packet_id, vec![transformer]);
+                self.inbound_transformers.get_mut(&P::get_state()).unwrap().insert(packet_id, vec![transformer]);
             }
         } else {
-            if let Some(vec) = self.outbound_transformers.get_mut(&packet_id) {
+            if let Some(vec) = self.outbound_transformers.get_mut(&P::get_state()).unwrap().get_mut(&packet_id) {
                 vec.push(transformer);
             } else {
-                self.outbound_transformers.insert(packet_id, vec![transformer]);
+                self.outbound_transformers.get_mut(&P::get_state()).unwrap().insert(packet_id, vec![transformer]);
             }
         }
     }

@@ -9,7 +9,7 @@ use contexts::Message::{NewConnection, Threads};
 
 use crate::packets::handling::HandlingContext;
 use crate::packets::Packet;
-use crate::packets::s2c::EntityPositionPacket;
+use crate::packets::s2c::play::EntityPositionPacket;
 
 mod packets;
 mod utils;
