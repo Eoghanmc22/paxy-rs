@@ -1,5 +1,6 @@
 use bytes::{BufMut, Buf};
 use crate::buffers::{VarInts, VarIntsMut, Strings, StringsMut, Bools, BoolsMut};
+use crate::set_vec_len;
 
 pub struct Vari32 {
     pub val: i32
@@ -80,6 +81,26 @@ impl Sendable for f64 {
     }
 }
 
+impl Sendable for u64 {
+    fn read(buffer: &mut dyn Buf) -> Self {
+        buffer.get_u64()
+    }
+
+    fn write(buffer: &mut dyn BufMut, data: &Self) {
+        buffer.put_u64(*data)
+    }
+}
+
+impl Sendable for i64 {
+    fn read(buffer: &mut dyn Buf) -> Self {
+        buffer.get_i64()
+    }
+
+    fn write(buffer: &mut dyn BufMut, data: &Self) {
+        buffer.put_i64(*data)
+    }
+}
+
 impl Sendable for String {
     fn read(mut buffer: &mut dyn Buf) -> Self {
         buffer.get_string()
@@ -87,5 +108,20 @@ impl Sendable for String {
 
     fn write(mut buffer: &mut dyn BufMut, data: &Self) {
         buffer.put_string(data)
+    }
+}
+
+impl Sendable for Vec<u8> {
+    fn read(mut buffer: &mut dyn Buf) -> Self {
+        let len = buffer.get_var_i32().0;
+        let mut vec = Vec::new();
+        set_vec_len(&mut vec, len as usize);
+        buffer.copy_to_slice(&mut vec);
+        vec
+    }
+
+    fn write(mut buffer: &mut dyn BufMut, data: &Self) {
+        buffer.put_var_i32(data.len() as i32);
+        buffer.put_slice(&data);
     }
 }

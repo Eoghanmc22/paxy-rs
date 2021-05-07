@@ -13,7 +13,7 @@ use utils::contexts::Message::{Threads, NewConnection};
 use utils::indexed_vec::IndexedVec;
 use buffer_helpers::{write_socket0, unbuffer_read, write_socket, buffer_read, copy_slice_to, validate_small_frame, read_socket};
 use utils::buffers::VarInts;
-use utils::set_vec_len;
+use utils::add_vec_len;
 
 /// Start network thread loop.
 /// Responsible for parsing and transforming every out/incoming packets.
@@ -130,7 +130,8 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
         }
         if read_buf.get_writer_index() == read_buf.vec.len() {
             let len = read_buf.vec.len();
-            set_vec_len(&mut read_buf.vec, len);
+            // double size
+            add_vec_len(&mut read_buf.vec, len);
             read_socket(connection_ctx, read_buf);
         } else {
             break;

@@ -1,4 +1,4 @@
-use crate::set_vec_len;
+use crate::add_vec_len;
 use bytes::{Buf, BufMut};
 use bytes::buf::UninitSlice;
 
@@ -67,7 +67,7 @@ impl<T> IndexedVec<T> {
         let remaining = self.vec.len() - self.get_writer_index();
         if remaining < extra {
             let needed = extra - remaining;
-            set_vec_len(&mut self.vec, needed);
+            add_vec_len(&mut self.vec, needed);
         }
     }
 }
@@ -103,7 +103,7 @@ unsafe impl BufMut for IndexedVec<u8> {
 
     fn chunk_mut(&mut self) -> &mut UninitSlice {
         if self.get_writer_index() == self.vec.len() {
-            set_vec_len(&mut self.vec, 64) // Grow the vec
+            add_vec_len(&mut self.vec, 64) // Grow the vec
         }
 
         let cap = self.vec.len();

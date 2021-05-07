@@ -7,7 +7,7 @@ use std::any::Any;
 
 use bytes::{Buf, BufMut};
 
-pub fn set_vec_len<T>(vec: &mut Vec<T>, extra_len: usize) {
+pub fn add_vec_len<T>(vec: &mut Vec<T>, extra_len: usize) {
     vec.reserve(extra_len);
 
     // SAFETY:
@@ -18,6 +18,22 @@ pub fn set_vec_len<T>(vec: &mut Vec<T>, extra_len: usize) {
     // with 0s just to overwrite them.
     unsafe {
         vec.set_len(vec.len()+extra_len);
+    }
+}
+
+pub fn set_vec_len<T>(vec: &mut Vec<T>, len: usize) {
+    if len > vec.len() {
+        vec.reserve(len-vec.len());
+    }
+
+    // SAFETY:
+    // This is safe because we will always write the uninitialized memory before reading it
+    // and we reserve enough capacity.
+
+    // Reason we dont use a safe method is because this is a lot faster. We dont need to initialize all of it
+    // with 0s just to overwrite them.
+    unsafe {
+        vec.set_len(len);
     }
 }
 
