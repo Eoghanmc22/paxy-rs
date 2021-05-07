@@ -1,4 +1,4 @@
-pub mod utils;
+pub mod buffer_helpers;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,12 +8,12 @@ use std::time::Duration;
 use mio::{Events, Poll};
 
 use packet_transformation::handling::{HandlingContext, UnparsedPacket};
-use ::utils::contexts::{Message, NetworkThreadContext, ConnectionContext};
-use ::utils::contexts::Message::{Threads, NewConnection};
-use ::utils::indexed_vec::IndexedVec;
-use self::utils::{write_socket0, unbuffer_read, write_socket, buffer_read, copy_slice_to, validate_small_frame, read_socket};
-use ::utils::buffers::VarInts;
-use ::utils::set_vec_len;
+use utils::contexts::{Message, NetworkThreadContext, ConnectionContext};
+use utils::contexts::Message::{Threads, NewConnection};
+use utils::indexed_vec::IndexedVec;
+use buffer_helpers::{write_socket0, unbuffer_read, write_socket, buffer_read, copy_slice_to, validate_small_frame, read_socket};
+use utils::buffers::VarInts;
+use utils::set_vec_len;
 
 /// Start network thread loop.
 /// Responsible for parsing and transforming every out/incoming packets.
@@ -47,11 +47,11 @@ pub fn thread_loop(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usi
 
     //Per thread buffers
     let mut packet_buf = IndexedVec::new();
-    ::utils::set_vec_len(&mut packet_buf.vec, 2048);
+    utils::set_vec_len(&mut packet_buf.vec, 2048);
     let mut uncompressed_buf = IndexedVec::new();
-    ::utils::set_vec_len(&mut uncompressed_buf.vec, 2048);
+    utils::set_vec_len(&mut uncompressed_buf.vec, 2048);
     let mut caching_buf = IndexedVec::new();
-    ::utils::set_vec_len(&mut caching_buf.vec, 2048);
+    utils::set_vec_len(&mut caching_buf.vec, 2048);
 
     let mut id_counter = 0;
 
