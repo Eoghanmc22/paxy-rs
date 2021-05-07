@@ -1,4 +1,3 @@
-use std::{sync, thread};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::{SendError, SyncSender};
@@ -7,24 +6,14 @@ use std::thread::JoinHandle;
 use mio::{Interest, Poll, Token};
 use mio::net::TcpStream;
 
-use crate::packets::handling::HandlingContext;
-use crate::utils::IndexedVec;
+use crate::indexed_vec::IndexedVec;
 
 pub struct PaxyThread {
-    thread: JoinHandle<()>,
-    channel: SyncSender<Message>,
+    pub thread: JoinHandle<()>,
+    pub channel: SyncSender<Message>,
 }
 
 impl PaxyThread {
-    pub fn spawn(handler: Arc<HandlingContext>, id: usize) -> PaxyThread {
-        // todo adjust? this prob isnt enough
-        let (tx, rx) = sync::mpsc::sync_channel(1000);
-        let thread = thread::spawn(move || {
-            crate::packets::networking::thread_loop(rx, handler, id);
-        });
-        PaxyThread { thread, channel: tx }
-    }
-
     pub fn notify(&self, msg: Message) -> Result<(), SendError<Message>> {
         self.channel.send(msg)
     }

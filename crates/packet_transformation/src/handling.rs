@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 
 use bytes::Buf;
-
-use crate::contexts::{ConnectionContext, NetworkThreadContext};
-use crate::packets::Packet;
-use crate::utils::IndexedVec;
+use utils::contexts::{NetworkThreadContext, ConnectionContext};
+use utils::Packet;
+use utils::indexed_vec::IndexedVec;
 
 /// Represents a packet that is decompressed, decrypted, and has a known id.
 pub struct UnparsedPacket<T: Buf> {

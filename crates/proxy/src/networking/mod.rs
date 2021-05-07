@@ -1,3 +1,5 @@
+pub mod utils;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
@@ -5,16 +7,13 @@ use std::time::Duration;
 
 use mio::{Events, Poll};
 
-use crate::contexts::{ConnectionContext, Message, NetworkThreadContext};
-use crate::contexts::Message::{NewConnection, Threads};
-use crate::packets::handling::{HandlingContext, UnparsedPacket};
-use crate::utils::{IndexedVec, VarInts};
-use crate::utils;
-
-pub const HANDSHAKING_STATE: u8 = 0;
-pub const STATUS_STATE: u8 = 1;
-pub const LOGIN_STATE: u8 = 2;
-pub const PLAY_STATE: u8 = 3;
+use packet_transformation::handling::{HandlingContext, UnparsedPacket};
+use ::utils::contexts::{Message, NetworkThreadContext, ConnectionContext};
+use ::utils::contexts::Message::{Threads, NewConnection};
+use ::utils::indexed_vec::IndexedVec;
+use self::utils::{write_socket0, unbuffer_read, write_socket, buffer_read, copy_slice_to, validate_small_frame, read_socket};
+use ::utils::buffers::VarInts;
+use ::utils::set_vec_len;
 
 /// Start network thread loop.
 /// Responsible for parsing and transforming every out/incoming packets.
@@ -48,11 +47,11 @@ pub fn thread_loop(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usi
 
     //Per thread buffers
     let mut packet_buf = IndexedVec::new();
-    utils::set_vec_len(&mut packet_buf.vec, 2048);
+    ::utils::set_vec_len(&mut packet_buf.vec, 2048);
     let mut uncompressed_buf = IndexedVec::new();
-    utils::set_vec_len(&mut uncompressed_buf.vec, 2048);
+    ::utils::set_vec_len(&mut uncompressed_buf.vec, 2048);
     let mut caching_buf = IndexedVec::new();
-    utils::set_vec_len(&mut caching_buf.vec, 2048);
+    ::utils::set_vec_len(&mut caching_buf.vec, 2048);
 
     let mut id_counter = 0;
 
@@ -101,7 +100,7 @@ pub fn thread_loop(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usi
 // write buffered data
 fn process_write(ctx: &mut ConnectionContext) {
     ctx.is_writable = true;
-    if !utils::write_socket0(&mut ctx.stream, &mut ctx.write_buffering, &mut ctx.should_close) {
+    if !write_socket0(&mut ctx.stream, &mut ctx.write_buffering, &mut ctx.should_close) {
         ctx.is_writable = false;
     }
 }
@@ -124,15 +123,15 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
     caching_buf.reset();
 
     // read new packets
-    utils::unbuffer_read(connection_ctx, read_buf);
-    while utils::read_socket(connection_ctx, read_buf) {
+    unbuffer_read(connection_ctx, read_buf);
+    while read_socket(connection_ctx, read_buf) {
         if connection_ctx.should_close {
             return;
         }
         if read_buf.get_writer_index() == read_buf.vec.len() {
             let len = read_buf.vec.len();
-            utils::set_vec_len(&mut read_buf.vec, len);
-            utils::read_socket(connection_ctx, read_buf);
+            set_vec_len(&mut read_buf.vec, len);
+            read_socket(connection_ctx, read_buf);
         } else {
             break;
         }
@@ -145,7 +144,7 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
 
     // read all the packets
     while len > pointer {
-        if len - pointer < 3 && !utils::validate_small_frame(read_buf, pointer, len) {
+        if len - pointer < 3 && !validate_small_frame(read_buf, pointer, len) {
             break;
         }
         let mut working_buf = &read_buf.vec[pointer..];
@@ -166,14 +165,14 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
 
                 if let Some(buffer) = optional_processed_buf {
                     // write in 2 steps to avoid extra copy
-                    utils::write_slice(caching_buf, &read_buf.vec[pointer..pointer + (bytes + id_bytes) as usize]);
-                    utils::write_slice(caching_buf, &buffer.vec[buffer.get_reader_index()..buffer.get_writer_index()]);
+                    copy_slice_to(&read_buf.vec[pointer..pointer + (bytes + id_bytes) as usize], caching_buf);
+                    copy_slice_to(&buffer.vec[buffer.get_reader_index()..buffer.get_writer_index()], caching_buf);
                 } else {
-                    utils::write_slice(caching_buf, &read_buf.vec[pointer..next]);
+                    copy_slice_to(&read_buf.vec[pointer..next], caching_buf);
                 }
 
                 if connection_ctx.should_close {
-                    utils::write_socket(connection_ctx, caching_buf);
+                    write_socket(connection_ctx, caching_buf);
                     return;
                 }
 
@@ -185,6 +184,6 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
         }
     }
 
-    utils::buffer_read(connection_ctx, read_buf);
-    utils::write_socket(other_ctx, caching_buf);
+    buffer_read(connection_ctx, read_buf);
+    write_socket(other_ctx, caching_buf);
 }
