@@ -1,3 +1,44 @@
+pub mod login {
+    use crate::packets::{Packet, networking};
+    use bytes::{Buf, BufMut};
+    use std::any::Any;
+    use crate::utils::{Strings, StringsMut};
+
+    pub struct LoginSuccess {
+        uuid: u128,
+        username: String
+    }
+
+    impl Packet for LoginSuccess {
+        fn read(mut buffer: &mut dyn Buf) -> Self where Self: Sized {
+            let uuid = buffer.get_u128();
+            let username = buffer.get_string();
+            LoginSuccess { uuid, username }
+        }
+
+        fn write(&self, mut buffer: &mut dyn BufMut) {
+            buffer.put_u128(self.uuid);
+            buffer.put_string(&self.username);
+        }
+
+        fn get_id() -> i32 where Self: Sized {
+            0x02
+        }
+
+        fn get_state() -> u8 where Self: Sized {
+            networking::LOGIN_STATE
+        }
+
+        fn is_inbound() -> bool where Self: Sized {
+            false
+        }
+
+        fn as_any(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+}
+
 pub mod play {
     use crate::packets::{Packet, networking};
     use bytes::{BufMut, Buf};

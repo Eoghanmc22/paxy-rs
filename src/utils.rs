@@ -141,6 +141,7 @@ impl<T: Buf> Strings for T {
         let len = self.get_var_i32().0;
         let mut slice = Vec::new();
         set_vec_len(&mut slice, len as usize);
+        self.copy_to_slice(&mut slice);
         String::from_utf8_lossy(&slice).to_string()
     }
 }

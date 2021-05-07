@@ -67,7 +67,7 @@ pub fn thread_loop(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usi
                 }
                 if event.is_readable() {
                     let mut other = thread_ctx.connections.remove(&player.token_other).unwrap();
-                    process_read(&thread_ctx, &mut player, &mut other, &mut packet_buf, &mut uncompressed_buf, &mut caching_buf, handler.clone());
+                    process_read(&mut thread_ctx, &mut player, &mut other, &mut packet_buf, &mut uncompressed_buf, &mut caching_buf, handler.clone());
 
                     thread_ctx.connections.insert(player.token_other.clone(), other);
                 }
@@ -109,7 +109,7 @@ fn process_write(ctx: &mut ConnectionContext) {
 // todo handle protocol state switching. right now we only check packet ids
 // todo handle encryption
 // todo handle compression
-fn process_read(thread_ctx: &NetworkThreadContext,
+fn process_read(mut thread_ctx: &mut NetworkThreadContext,
                 connection_ctx: &mut ConnectionContext,
                 other_ctx: &mut ConnectionContext,
                 read_buf: &mut IndexedVec<u8>,
@@ -159,9 +159,9 @@ fn process_read(thread_ctx: &NetworkThreadContext,
 
                 let unparsed_packet = UnparsedPacket::new(id, working_buf);
                 let optional_processed_buf = if connection_ctx.inbound {
-                    handler.handle_inbound_packet(thread_ctx, connection_ctx, unparsed_packet)
+                    handler.handle_inbound_packet(&mut thread_ctx, connection_ctx, other_ctx, unparsed_packet)
                 } else {
-                    handler.handle_outbound_packet(thread_ctx, connection_ctx, unparsed_packet)
+                    handler.handle_outbound_packet(&mut thread_ctx, connection_ctx, other_ctx, unparsed_packet)
                 };
 
                 if let Some(buffer) = optional_processed_buf {
