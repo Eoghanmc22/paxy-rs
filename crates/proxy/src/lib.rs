@@ -4,7 +4,6 @@ use std::sync::Arc;
 use mio::{Events, Interest, Poll, Token};
 use mio::net::{TcpListener, TcpStream};
 
-use utils::Packet;
 use utils::contexts::Message::{Threads, NewConnection};
 use utils::contexts::PaxyThread;
 use packet_transformation::handling::HandlingContext;
@@ -15,26 +14,15 @@ use packet_transformation::TransformationResult::{Unchanged, Modified, Canceled}
 mod networking;
 
 fn register_packets(handler_context: &mut HandlingContext) {
-    handler_context.register_packet_supplier(|buf| {
-        c2s::handshake::HandshakePacket::read(buf)
-    });
     handler_context.register_transformer(|_thread_ctx, connection_ctx, other_ctx, packet: &mut c2s::handshake::HandshakePacket| {
         connection_ctx.state = packet.next_state.val as u8;
         other_ctx.state = packet.next_state.val as u8;
         Unchanged
     });
-
-    handler_context.register_packet_supplier(|buf| {
-        s2c::login::LoginSuccess::read(buf)
-    });
     handler_context.register_transformer(|_thread_ctx, connection_ctx, other_ctx, packet: &mut s2c::login::LoginSuccess| {
         connection_ctx.state = packets::PLAY_STATE;
         other_ctx.state = packets::PLAY_STATE;
         Unchanged
-    });
-
-    handler_context.register_packet_supplier(|buf| {
-        s2c::login::SetCompression::read(buf)
     });
     handler_context.register_transformer(|_thread_ctx, connection_ctx, other_ctx, packet: &mut s2c::login::SetCompression| {
         connection_ctx.compression_threshold = packet.threshold.val;
@@ -44,20 +32,14 @@ fn register_packets(handler_context: &mut HandlingContext) {
 }
 
 fn register_transformers(handler_context: &mut HandlingContext) {
-    handler_context.register_packet_supplier(|buf| {
-        s2c::play::EntityPositionPacket::read(buf)
-    });
     handler_context.register_transformer(|_thread_ctx, _connection_ctx, _other_ctx, packet: &mut s2c::play::EntityPositionPacket| {
         packet.delta_x = 0;
         packet.delta_y = 100;
         Modified
     });
-    handler_context.register_packet_supplier(|buf| {
-        c2s::status::Ping::read(buf)
-    });
-    handler_context.register_transformer(|_thread_ctx, _connection_ctx, _other_ctx, packet: &mut c2s::status::Ping| {
+    /*handler_context.register_transformer(|_thread_ctx, _connection_ctx, _other_ctx, _packet: &mut c2s::status::Ping| {
         Canceled
-    });
+    });*/
 }
 
 fn spawn_thread(handler: Arc<HandlingContext>, id: usize) -> PaxyThread {

@@ -115,12 +115,22 @@ impl HandlingContext {
         });
 
         if P::is_inbound() {
+            if let None = self.inbound_packets.get_mut(&P::get_state()).unwrap().get(&packet_id) {
+                self.register_packet_supplier(|buf| {
+                   P::read(buf)
+                });
+            }
             if let Some(vec) = self.inbound_transformers.get_mut(&P::get_state()).unwrap().get_mut(&packet_id) {
                 vec.push(transformer);
             } else {
                 self.inbound_transformers.get_mut(&P::get_state()).unwrap().insert(packet_id, vec![transformer]);
             }
         } else {
+            if let None = self.outbound_packets.get_mut(&P::get_state()).unwrap().get(&packet_id) {
+                self.register_packet_supplier(|buf| {
+                    P::read(buf)
+                });
+            }
             if let Some(vec) = self.outbound_transformers.get_mut(&P::get_state()).unwrap().get_mut(&packet_id) {
                 vec.push(transformer);
             } else {
