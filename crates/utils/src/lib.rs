@@ -37,6 +37,21 @@ pub fn set_vec_len<T>(vec: &mut Vec<T>, len: usize) {
     }
 }
 
+pub fn get_var_i32_size(num : i32) -> i32 {
+    let num = num as u64;
+    if num & 0xFFFFFF80 == 0 {
+        1
+    } else if num & 0xFFFFC000 == 0 {
+        2
+    } else if num & 0xFFE00000 == 0 {
+        3
+    } else if num & 0xF0000000 == 0 {
+        4
+    } else {
+        5
+    }
+}
+
 pub trait Packet : Any {
     fn read(buffer: &mut dyn Buf) -> Self
         where Self: Sized;

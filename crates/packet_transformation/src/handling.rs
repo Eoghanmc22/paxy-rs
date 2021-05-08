@@ -4,6 +4,7 @@ use bytes::Buf;
 use utils::contexts::{NetworkThreadContext, ConnectionContext};
 use utils::Packet;
 use utils::indexed_vec::IndexedVec;
+use utils::buffers::VarIntsMut;
 
 /// Represents a packet that is decompressed, decrypted, and has a known id.
 pub struct UnparsedPacket<T: Buf> {
@@ -19,8 +20,8 @@ impl<T: Buf> UnparsedPacket<T> {
 
 /// Contains protocol mapping.
 pub struct HandlingContext {
-    inbound_packets: HashMap<u8, HashMap<i32, Box<dyn Fn(&mut dyn Buf) -> Box<dyn Packet> + Send + Sync>>>,
-    outbound_packets: HashMap<u8, HashMap<i32, Box<dyn Fn(&mut dyn Buf) -> Box<dyn Packet> + Send + Sync>>>,
+    inbound_packets: HashMap<u8, HashMap<i32, Box<dyn Fn(&mut dyn Buf) -> (Box<dyn Packet>, i32) + Send + Sync>>>,
+    outbound_packets: HashMap<u8, HashMap<i32, Box<dyn Fn(&mut dyn Buf) -> (Box<dyn Packet>, i32) + Send + Sync>>>,
 
     inbound_transformers: HashMap<u8, HashMap<i32, Vec<Box<dyn Fn(&mut NetworkThreadContext, &mut ConnectionContext, &mut ConnectionContext, &mut dyn Packet) + Send + Sync>>>>,
     outbound_transformers: HashMap<u8, HashMap<i32, Vec<Box<dyn Fn(&mut NetworkThreadContext, &mut ConnectionContext, &mut ConnectionContext, &mut dyn Packet) + Send + Sync>>>>,
@@ -54,14 +55,15 @@ impl HandlingContext {
             t
         } else { return None; };
 
-        let mut packet: Box<dyn Packet> = packet_supplier(&mut packet.buf);
+        let mut packet: (Box<dyn Packet>, i32) = packet_supplier(&mut packet.buf);
 
         for transformer in transformers.iter() {
-            transformer(thread_ctx, connection_ctx, other_ctx, &mut *packet);
+            transformer(thread_ctx, connection_ctx, other_ctx, &mut *packet.0);
         }
 
         let mut buffer: IndexedVec<u8> = IndexedVec::new();
-        packet.write(&mut buffer);
+        buffer.put_var_i32(packet.1);
+        packet.0.write(&mut buffer);
 
         Some(buffer)
     }
@@ -75,14 +77,15 @@ impl HandlingContext {
             t
         } else { return None; };
 
-        let mut packet: Box<dyn Packet> = packet_supplier(&mut packet.buf);
+        let mut packet: (Box<dyn Packet>, i32) = packet_supplier(&mut packet.buf);
 
         for transformer in transformers.iter() {
-            transformer(thread_ctx, connection_ctx, other_ctx, &mut *packet);
+            transformer(thread_ctx, connection_ctx, other_ctx, &mut *packet.0);
         }
 
         let mut buffer: IndexedVec<u8> = IndexedVec::new();
-        packet.write(&mut buffer);
+        buffer.put_var_i32(packet.1);
+        packet.0.write(&mut buffer);
 
         Some(buffer)
     }
@@ -90,9 +93,9 @@ impl HandlingContext {
     pub fn register_packet_supplier<P: Packet, F: 'static + Fn(&mut dyn Buf) -> P + Send + Sync>(&mut self, transformer: F) {
         let packet_id = P::get_id();
         if P::is_inbound() {
-            self.inbound_packets.get_mut(&P::get_state()).unwrap().insert(packet_id, Box::new(move |buf| Box::new(transformer(buf))));
+            self.inbound_packets.get_mut(&P::get_state()).unwrap().insert(packet_id, Box::new(move |buf| (Box::new(transformer(buf)), P::get_id())));
         } else {
-            self.outbound_packets.get_mut(&P::get_state()).unwrap().insert(packet_id, Box::new(move |buf| Box::new(transformer(buf))));
+            self.outbound_packets.get_mut(&P::get_state()).unwrap().insert(packet_id, Box::new(move |buf| (Box::new(transformer(buf)), P::get_id())));
         }
     }
 

@@ -12,8 +12,11 @@ use utils::contexts::{Message, NetworkThreadContext, ConnectionContext};
 use utils::contexts::Message::{Threads, NewConnection};
 use utils::indexed_vec::IndexedVec;
 use buffer_helpers::{write_socket0, unbuffer_read, write_socket, buffer_read, copy_slice_to, validate_small_frame, read_socket};
-use utils::buffers::VarInts;
+use utils::buffers::{VarInts, VarIntsMut};
 use utils::add_vec_len;
+use flate2::write::{ZlibDecoder, ZlibEncoder};
+use std::io::Write;
+use flate2::Compression;
 
 /// Start network thread loop.
 /// Responsible for parsing and transforming every out/incoming packets.
@@ -48,8 +51,8 @@ pub fn thread_loop(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usi
     //Per thread buffers
     let mut packet_buf = IndexedVec::new();
     utils::set_vec_len(&mut packet_buf.vec, 2048);
-    let mut uncompressed_buf = IndexedVec::new();
-    utils::set_vec_len(&mut uncompressed_buf.vec, 2048);
+    let mut compressed_buf = IndexedVec::new();
+    utils::set_vec_len(&mut compressed_buf.vec, 2048);
     let mut caching_buf = IndexedVec::new();
     utils::set_vec_len(&mut caching_buf.vec, 2048);
 
@@ -66,7 +69,7 @@ pub fn thread_loop(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usi
                 }
                 if event.is_readable() {
                     let mut other = thread_ctx.connections.remove(&player.token_other).unwrap();
-                    process_read(&mut thread_ctx, &mut player, &mut other, &mut packet_buf, &mut uncompressed_buf, &mut caching_buf, handler.clone());
+                    process_read(&mut thread_ctx, &mut player, &mut other, &mut packet_buf, &mut compressed_buf, &mut caching_buf, handler.clone());
 
                     thread_ctx.connections.insert(player.token_other.clone(), other);
                 }
@@ -112,14 +115,13 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
                 connection_ctx: &mut ConnectionContext,
                 other_ctx: &mut ConnectionContext,
                 read_buf: &mut IndexedVec<u8>,
-                compression_buf: &mut IndexedVec<u8>,
+                mut compression_buf: &mut IndexedVec<u8>,
                 caching_buf: &mut IndexedVec<u8>,
                 handler: Arc<HandlingContext>) {
 
     let mut pointer = 0;
     let mut next;
     read_buf.reset();
-    compression_buf.reset();
     caching_buf.reset();
 
     // read new packets
@@ -141,11 +143,11 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
         return;
     }
 
-    let len = read_buf.get_writer_index();
+    let readable = read_buf.get_writer_index();
 
     // read all the packets
-    while len > pointer {
-        if len - pointer < 3 && !validate_small_frame(read_buf, pointer, len) {
+    while readable > pointer {
+        if readable - pointer < 3 && !validate_small_frame(read_buf, pointer, readable) {
             break;
         }
         let mut working_buf = &read_buf.vec[pointer..];
@@ -153,9 +155,25 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
         if let Some((packet_len, bytes)) = working_buf.get_var_i32_limit(3) {
             next = packet_len as usize + pointer + bytes as usize;
 
+            let compression_threshold = connection_ctx.compression_threshold;
             // the full packet is available
-            if len >= next {
-                let (id, id_bytes) = working_buf.get_var_i32();
+            if readable >= next {
+                if compression_threshold > 0 {
+                    let real_length = working_buf.get_var_i32();
+                    if real_length.0 > 0 {
+                        compression_buf.reset();
+                        compression_buf.ensure_writable(real_length.0 as usize);
+
+                        {
+                            //decompress
+                            let mut decompressor = ZlibDecoder::new(&mut compression_buf);
+                            decompressor.write_all(&working_buf[0..(packet_len - real_length.1) as usize]).unwrap();
+                        }
+                        working_buf = compression_buf.to_slice();
+                    }
+                }
+
+                let (id, _id_bytes) = working_buf.get_var_i32();
 
                 let unparsed_packet = UnparsedPacket::new(id, working_buf);
                 let optional_processed_buf = if connection_ctx.inbound {
@@ -165,9 +183,37 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
                 };
 
                 if let Some(buffer) = optional_processed_buf {
+                    let mut final_buffer = buffer.to_slice();
+
+                    let mut is_uncompressed = false;
+                    if compression_threshold > 0 {
+                        let length = final_buffer.len();
+                        if length > compression_threshold as usize {
+                            compression_buf.reset();
+                            compression_buf.put_var_i32(length as i32);
+
+                            {
+                                //recompress
+                                let mut compressor = ZlibEncoder::new(&mut compression_buf, Compression::fast());
+                                compressor.write_all(final_buffer).unwrap();
+                            }
+                            final_buffer = compression_buf.to_slice();
+                        } else {
+                            is_uncompressed = true;
+                        }
+                    }
+
                     // write in 2 steps to avoid extra copy
-                    copy_slice_to(&read_buf.vec[pointer..pointer + (bytes + id_bytes) as usize], caching_buf);
-                    copy_slice_to(&buffer.vec[buffer.get_reader_index()..buffer.get_writer_index()], caching_buf);
+                    let len = final_buffer.len() as i32 + if is_uncompressed { 1 } else { 0 };
+                    let mut frame = IndexedVec::new();
+                    frame.ensure_writable(4);
+                    frame.put_var_i32(len);
+                    if is_uncompressed {
+                        frame.put_var_i32(0);
+                    }
+
+                    copy_slice_to(frame.to_slice(), caching_buf);
+                    copy_slice_to(final_buffer, caching_buf);
                 } else {
                     copy_slice_to(&read_buf.vec[pointer..next], caching_buf);
                 }

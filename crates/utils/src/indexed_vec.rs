@@ -1,6 +1,7 @@
 use crate::add_vec_len;
 use bytes::{Buf, BufMut};
 use bytes::buf::UninitSlice;
+use std::io::{Write, Error, Read};
 
 #[derive(Debug)]
 pub struct IndexedVec<T> {
@@ -69,6 +70,10 @@ impl<T> IndexedVec<T> {
             let needed = extra - remaining;
             add_vec_len(&mut self.vec, needed);
         }
+    }
+
+    pub fn to_slice(&self) -> &[T] {
+        &self.vec[self.get_reader_index()..self.get_writer_index()]
     }
 }
 
@@ -144,5 +149,23 @@ unsafe impl BufMut for IndexedVec<u8> {
                 }
             }
         }
+    }
+}
+
+impl Write for IndexedVec<u8> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
+        self.put_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+impl Read for IndexedVec<u8> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+        self.copy_to_slice(buf);
+        Ok(buf.len())
     }
 }
