@@ -17,6 +17,7 @@ use utils::add_vec_len;
 use flate2::write::{ZlibDecoder, ZlibEncoder};
 use std::io::Write;
 use flate2::Compression;
+use packet_transformation::TransformationResult;
 
 /// Start network thread loop.
 /// Responsible for parsing and transforming every out/incoming packets.
@@ -176,46 +177,50 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
                 let (id, _id_bytes) = working_buf.get_var_i32();
 
                 let unparsed_packet = UnparsedPacket::new(id, working_buf);
-                let optional_processed_buf = if connection_ctx.inbound {
-                    handler.handle_inbound_packet(&mut thread_ctx, connection_ctx, other_ctx, unparsed_packet)
-                } else {
-                    handler.handle_outbound_packet(&mut thread_ctx, connection_ctx, other_ctx, unparsed_packet)
-                };
+                let processing_result =
+                    handler.handle_packet(&mut thread_ctx, connection_ctx, other_ctx, unparsed_packet, connection_ctx.inbound);
 
-                if let Some(buffer) = optional_processed_buf {
-                    let mut final_buffer = buffer.to_slice();
+                match processing_result.0 {
+                    TransformationResult::Unchanged => {
+                        copy_slice_to(&read_buf.vec[pointer..next], caching_buf);
+                    }
+                    TransformationResult::Modified => {
+                        let buffer = processing_result.1.unwrap();
+                        let mut final_buffer = buffer.to_slice();
 
-                    let mut is_uncompressed = false;
-                    if compression_threshold > 0 {
-                        let length = final_buffer.len();
-                        if length > compression_threshold as usize {
-                            compression_buf.reset();
-                            compression_buf.put_var_i32(length as i32);
+                        let mut is_uncompressed = false;
+                        if compression_threshold > 0 {
+                            let length = final_buffer.len();
+                            if length > compression_threshold as usize {
+                                compression_buf.reset();
+                                compression_buf.put_var_i32(length as i32);
 
-                            {
-                                //recompress
-                                let mut compressor = ZlibEncoder::new(&mut compression_buf, Compression::fast());
-                                compressor.write_all(final_buffer).unwrap();
+                                {
+                                    //recompress
+                                    let mut compressor = ZlibEncoder::new(&mut compression_buf, Compression::fast());
+                                    compressor.write_all(final_buffer).unwrap();
+                                }
+                                final_buffer = compression_buf.to_slice();
+                            } else {
+                                is_uncompressed = true;
                             }
-                            final_buffer = compression_buf.to_slice();
-                        } else {
-                            is_uncompressed = true;
                         }
-                    }
 
-                    // write in 2 steps to avoid extra copy
-                    let len = final_buffer.len() as i32 + if is_uncompressed { 1 } else { 0 };
-                    let mut frame = IndexedVec::new();
-                    frame.ensure_writable(4);
-                    frame.put_var_i32(len);
-                    if is_uncompressed {
-                        frame.put_var_i32(0);
-                    }
+                        // write in 2 steps to avoid extra copy
+                        let len = final_buffer.len() as i32 + if is_uncompressed { 1 } else { 0 };
+                        let mut frame = IndexedVec::new();
+                        frame.ensure_writable(4);
+                        frame.put_var_i32(len);
+                        if is_uncompressed {
+                            frame.put_var_i32(0);
+                        }
 
-                    copy_slice_to(frame.to_slice(), caching_buf);
-                    copy_slice_to(final_buffer, caching_buf);
-                } else {
-                    copy_slice_to(&read_buf.vec[pointer..next], caching_buf);
+                        copy_slice_to(frame.to_slice(), caching_buf);
+                        copy_slice_to(final_buffer, caching_buf);
+                    }
+                    TransformationResult::Canceled => {
+                        // NOOP
+                    }
                 }
 
                 if connection_ctx.should_close {
