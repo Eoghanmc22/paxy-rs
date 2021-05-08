@@ -155,6 +155,7 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
 
         if let Some((packet_len, bytes)) = working_buf.get_var_i32_limit(3) {
             next = packet_len as usize + pointer + bytes as usize;
+            working_buf = &working_buf[0..packet_len as usize];
 
             let compression_threshold = connection_ctx.compression_threshold;
             // the full packet is available
@@ -168,7 +169,7 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
                         {
                             //decompress
                             let mut decompressor = ZlibDecoder::new(&mut compression_buf);
-                            decompressor.write_all(&working_buf[0..(packet_len - real_length.1) as usize]).unwrap();
+                            decompressor.write_all(working_buf).unwrap();
                         }
                         working_buf = compression_buf.to_slice();
                     }

@@ -88,7 +88,7 @@ impl Buf for IndexedVec<u8> {
 
     fn advance(&mut self, cnt: usize) {
         self.advance_reader_index(cnt);
-        if self.get_reader_index() >= self.vec.len() {
+        if self.get_reader_index() > self.vec.len() {
             panic!("no more space, reader_index: {} cnt: {}, len: {}", self.get_reader_index()-cnt, cnt, self.vec.len())
         }
     }
