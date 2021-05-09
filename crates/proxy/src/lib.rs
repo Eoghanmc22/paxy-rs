@@ -32,9 +32,7 @@ fn register_packets(handler_context: &mut HandlingContext) {
     });
     handler_context.register_transformer(|_thread_ctx, _connection_ctx, _other_ctx, packet: &mut s2c::play::PluginMessage| {
         if packet.channel == "minecraft:brand" {
-            println!("data: {:?}", packet.data.vec);
             let string = packet.data.get_string();
-            println!("string: {}", string);
             packet.data.reset();
             packet.data.put_string(&format!("Paxy <-> {}", string));
             Modified
