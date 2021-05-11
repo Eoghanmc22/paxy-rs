@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use bytes::Buf;
 use utils::contexts::{NetworkThreadContext, ConnectionContext};
 use utils::Packet;
@@ -7,6 +5,9 @@ use utils::indexed_vec::IndexedVec;
 use utils::buffers::VarIntsMut;
 use crate::TransformationResult;
 use crate::TransformationResult::{Unchanged, Canceled, Modified};
+
+const PACKET_IDS: usize = 0x5B+1;
+const STATES: usize = 4;
 
 /// Represents a packet that is decompressed, decrypted, and has a known id.
 pub struct UnparsedPacket<T: Buf> {
@@ -22,48 +23,52 @@ impl<T: Buf> UnparsedPacket<T> {
 
 /// Contains protocol mapping.
 pub struct HandlingContext {
-    inbound_packets: HashMap<u8, HashMap<i32, Box<dyn Fn(&mut dyn Buf) -> (Box<dyn Packet>, i32) + Send + Sync>>>,
-    outbound_packets: HashMap<u8, HashMap<i32, Box<dyn Fn(&mut dyn Buf) -> (Box<dyn Packet>, i32) + Send + Sync>>>,
+    inbound_packets: [[Option<Box<dyn Fn(&mut dyn Buf) -> (Box<dyn Packet>, i32) + Send + Sync>>; PACKET_IDS]; STATES],
+    outbound_packets: [[Option<Box<dyn Fn(&mut dyn Buf) -> (Box<dyn Packet>, i32) + Send + Sync>>; PACKET_IDS]; STATES],
 
-    inbound_transformers: HashMap<u8, HashMap<i32, Vec<Box<dyn Fn(&mut NetworkThreadContext, &mut ConnectionContext, &mut ConnectionContext, &mut dyn Packet) -> TransformationResult + Send + Sync>>>>,
-    outbound_transformers: HashMap<u8, HashMap<i32, Vec<Box<dyn Fn(&mut NetworkThreadContext, &mut ConnectionContext, &mut ConnectionContext, &mut dyn Packet) -> TransformationResult + Send + Sync>>>>,
+    inbound_transformers: [[Option<Vec<Box<dyn Fn(&mut NetworkThreadContext, &mut ConnectionContext, &mut ConnectionContext, &mut dyn Packet) -> TransformationResult + Send + Sync>>>; PACKET_IDS]; STATES],
+    outbound_transformers: [[Option<Vec<Box<dyn Fn(&mut NetworkThreadContext, &mut ConnectionContext, &mut ConnectionContext, &mut dyn Packet) -> TransformationResult + Send + Sync>>>; PACKET_IDS]; STATES],
 }
 
 impl HandlingContext {
     pub fn new() -> HandlingContext {
-        let mut ctx = HandlingContext {
-            inbound_packets: HashMap::new(),
-            outbound_packets: HashMap::new(),
-            inbound_transformers: HashMap::new(),
-            outbound_transformers: HashMap::new()
-        };
+        const NONE1: Option<Box<dyn Fn(&mut dyn Buf) -> (Box<dyn Packet>, i32) + Send + Sync>> = None;
+        const NONE2: Option<Vec<Box<dyn Fn(&mut NetworkThreadContext, &mut ConnectionContext, &mut ConnectionContext, &mut dyn Packet) -> TransformationResult + Send + Sync>>> = None;
+        const ARRAY1: [Option<Box<dyn Fn(&mut dyn Buf) -> (Box<dyn Packet>, i32) + Send + Sync>>; PACKET_IDS] = [NONE1; PACKET_IDS];
+        const ARRAY2: [Option<Vec<Box<dyn Fn(&mut NetworkThreadContext, &mut ConnectionContext, &mut ConnectionContext, &mut dyn Packet) -> TransformationResult + Send + Sync>>>; PACKET_IDS] = [NONE2; PACKET_IDS];
 
-        for state in 0..=3 {
-            ctx.inbound_packets.insert(state, HashMap::new());
-            ctx.outbound_packets.insert(state, HashMap::new());
-            ctx.inbound_transformers.insert(state, HashMap::new());
-            ctx.outbound_transformers.insert(state, HashMap::new());
+        HandlingContext {
+            inbound_packets: [ARRAY1; STATES],
+            outbound_packets: [ARRAY1; STATES],
+            inbound_transformers: [ARRAY2; STATES],
+            outbound_transformers: [ARRAY2; STATES]
         }
-
-        ctx
     }
 
     pub fn handle_packet(&self, thread_ctx: &mut NetworkThreadContext, connection_ctx: &mut ConnectionContext, other_ctx: &mut ConnectionContext, mut packet: UnparsedPacket<&[u8]>, inbound: bool) -> (TransformationResult, Option<IndexedVec<u8>>) {
-        let id = packet.id;
+        let id = packet.id as usize;
         let packet_supplier;
         let transformers;
+
+        let state = connection_ctx.state as usize;
+
+        // No such packet
+        if state >= STATES && id >= PACKET_IDS {
+            println!("No such packet, state: {}, id: {}", connection_ctx.state, id);
+            return (Unchanged, None);
+        }
         if inbound {
-            packet_supplier = if let Some(t) = self.inbound_packets.get(&connection_ctx.state).unwrap().get(&id) {
+            packet_supplier = if let Some(t) = &self.inbound_packets[state][id] {
                 t
             } else { return (Unchanged, None); };
-            transformers = if let Some(t) = self.inbound_transformers.get(&connection_ctx.state).unwrap().get(&id) {
+            transformers = if let Some(t) = &self.inbound_transformers[state][id] {
                 t
             } else { return (Unchanged, None); };
         } else {
-            packet_supplier = if let Some(t) = self.outbound_packets.get(&connection_ctx.state).unwrap().get(&id) {
+            packet_supplier = if let Some(t) = &self.outbound_packets[state][id] {
                 t
             } else { return (Unchanged, None); };
-            transformers = if let Some(t) = self.outbound_transformers.get(&connection_ctx.state).unwrap().get(&id) {
+            transformers = if let Some(t) = &self.outbound_transformers[state][id] {
                 t
             } else { return (Unchanged, None); };
         }
@@ -92,16 +97,18 @@ impl HandlingContext {
     }
 
     pub fn register_packet_supplier<P: Packet, F: 'static + Fn(&mut dyn Buf) -> P + Send + Sync>(&mut self, transformer: F) {
-        let packet_id = P::get_id();
+        let packet_id = P::get_id() as usize;
+        let state = P::get_state() as usize;
         if P::is_inbound() {
-            self.inbound_packets.get_mut(&P::get_state()).unwrap().insert(packet_id, Box::new(move |buf| (Box::new(transformer(buf)), P::get_id())));
+            self.inbound_packets[state][packet_id] = Some(Box::new(move |buf| (Box::new(transformer(buf)), P::get_id())));
         } else {
-            self.outbound_packets.get_mut(&P::get_state()).unwrap().insert(packet_id, Box::new(move |buf| (Box::new(transformer(buf)), P::get_id())));
+            self.outbound_packets[state][packet_id] = Some(Box::new(move |buf| (Box::new(transformer(buf)), P::get_id())));
         }
     }
 
     pub fn register_transformer<P: Packet, F: 'static + Fn(&mut NetworkThreadContext, &mut ConnectionContext, &mut ConnectionContext, &mut P) -> TransformationResult + Send + Sync>(&mut self, transformer: F) {
-        let packet_id = P::get_id();
+        let packet_id = P::get_id() as usize;
+        let state = P::get_state() as usize;
 
         let transformer : Box<dyn Fn(&mut NetworkThreadContext, &mut ConnectionContext, &mut ConnectionContext, &mut dyn Packet) -> TransformationResult + Send + Sync> =
             Box::new(move |thread_ctx, connection_ctx, other_ctx, packet| {
@@ -115,26 +122,26 @@ impl HandlingContext {
         });
 
         if P::is_inbound() {
-            if let None = self.inbound_packets.get_mut(&P::get_state()).unwrap().get(&packet_id) {
+            if let None = self.inbound_packets[state][packet_id] {
                 self.register_packet_supplier(|buf| {
                    P::read(buf)
                 });
             }
-            if let Some(vec) = self.inbound_transformers.get_mut(&P::get_state()).unwrap().get_mut(&packet_id) {
+            if let Some(vec) = &mut self.inbound_transformers[state][packet_id] {
                 vec.push(transformer);
             } else {
-                self.inbound_transformers.get_mut(&P::get_state()).unwrap().insert(packet_id, vec![transformer]);
+                self.inbound_transformers[state][packet_id] = Some(vec![transformer]);
             }
         } else {
-            if let None = self.outbound_packets.get_mut(&P::get_state()).unwrap().get(&packet_id) {
+            if let None = self.outbound_packets[state][packet_id] {
                 self.register_packet_supplier(|buf| {
                     P::read(buf)
                 });
             }
-            if let Some(vec) = self.outbound_transformers.get_mut(&P::get_state()).unwrap().get_mut(&packet_id) {
+            if let Some(vec) = &mut self.outbound_transformers[state][packet_id] {
                 vec.push(transformer);
             } else {
-                self.outbound_transformers.get_mut(&P::get_state()).unwrap().insert(packet_id, vec![transformer]);
+                self.outbound_transformers[state][packet_id] = Some(vec![transformer]);
             }
         }
     }
