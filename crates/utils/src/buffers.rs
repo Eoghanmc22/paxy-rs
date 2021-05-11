@@ -74,16 +74,26 @@ impl<T: Buf> VarInts for T {
 
 impl<T: BufMut> VarIntsMut for T {
     fn put_var_i32(&mut self, num: i32) {
-        let mut number = num;
-        loop {
-            let mut temp = number as u8 & 0b01111111;
-            number >>= 7;
-            if number != 0 {
-                temp |= 0b10000000;
-            }
-            self.put_u8(temp);
-            if number == 0 {
-                break;
+        let mut val = num as u32;
+
+        // adapted from velocity
+        if val & (0xFFFFFFFF << 7) == 0 {
+            self.put_u8(val as u8);
+        } else if val & (0xFFFFFFFF << 14) == 0 {
+            let w = (val & 0x7F | 0x80) << 8 | (val >> 7);
+            self.put_u16(w as u16);
+        } else if val & (0xFFFFFFFF << 21) == 0 {
+            let w = (val & 0x7F | 0x80) << 16 | ((val >> 7) & 0x7F | 0x80) << 8 | (val >> 14);
+            self.put_uint(w as u64, 3);
+        } else {
+            // fall back on loop
+            loop {
+                if val & 0xFFFFFF80 == 0 {
+                    self.put_u8(val as u8);
+                    return;
+                }
+                self.put_u8(val as u8 & 0x7F | 0x80);
+                val >>= 7;
             }
         }
     }
