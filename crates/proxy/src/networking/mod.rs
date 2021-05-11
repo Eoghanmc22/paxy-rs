@@ -134,18 +134,20 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
         return;
     }
 
-    let readable = read_buf.get_writer_index();
+    let readable = read_buf.readable_bytes();
 
     // read all the packets
     while readable > pointer {
-        if let Some((packet_len, packet_len_bytes_red)) = read_frame(read_buf, pointer, readable) {
+        if let Some((packet_len, packet_len_bytes_red)) = read_frame(read_buf, pointer, readable, connection_ctx) {
             let offset = pointer + packet_len_bytes_red;
-            let mut working_buf = &read_buf.vec[offset..offset + packet_len];
-            next = packet_len as usize + pointer + packet_len_bytes_red as usize;
+            next = offset + packet_len as usize;
 
-            let compression_threshold = connection_ctx.compression_threshold;
             // the full packet is available
             if readable >= next {
+                let mut working_buf = &read_buf.vec[offset..offset + packet_len];
+
+                let compression_threshold = connection_ctx.compression_threshold;
+
                 if compression_threshold > 0 {
                     let real_length = working_buf.get_var_i32();
                     if real_length.0 > 0 {
@@ -204,23 +206,21 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
             } else {
                 break;
             }
+        } else {
+            if connection_ctx.should_close {
+                return;
+            }
+            break;
         }
     }
+    read_buf.set_reader_index(pointer);
 
     buffer_read(connection_ctx, read_buf);
     write_socket(other_ctx, caching_buf);
 }
 
 pub fn get_needed_data(read_buf: &mut IndexedVec<u8>, connection_ctx: &mut ConnectionContext) {
-    println!("p{:?}, ri: {}, wi: {}", read_buf.as_slice(), read_buf.get_reader_index(), read_buf.get_writer_index());
-    let wi = read_buf.get_writer_index();
     unbuffer_read(connection_ctx, read_buf);
-    println!("b{:?}, ri: {}, wi: {}", read_buf.as_slice(), read_buf.get_reader_index(), read_buf.get_writer_index());
-    if wi != read_buf.get_writer_index() {
-        println!("buffered data");
-    } else {
-        println!("no buffered data");
-    }
     while read_socket(connection_ctx, read_buf) {
         if connection_ctx.should_close {
             return;
@@ -233,9 +233,6 @@ pub fn get_needed_data(read_buf: &mut IndexedVec<u8>, connection_ctx: &mut Conne
             break;
         }
     }
-
-    let a: &[i8] = unsafe { & *(read_buf.as_slice() as *const [u8] as *const _ as *const [i8]) };
-    println!("a{:?}, ri: {}, wi: {}", a, read_buf.get_reader_index(), read_buf.get_writer_index());
 }
 
 pub fn decompress_packet<'a>(real_length: usize, working_buf: &mut &'a[u8], decompressor: &mut Decompressor, compression_buffer: &'a mut IndexedVec<u8>) {

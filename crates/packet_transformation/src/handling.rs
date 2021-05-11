@@ -48,11 +48,11 @@ impl HandlingContext {
         ctx
     }
 
-    pub fn handle_packet(&self, thread_ctx: &mut NetworkThreadContext, connection_ctx: &mut ConnectionContext, other_ctx: &mut ConnectionContext, mut packet: UnparsedPacket<&[u8]>, in_bound: bool) -> (TransformationResult, Option<IndexedVec<u8>>) {
+    pub fn handle_packet(&self, thread_ctx: &mut NetworkThreadContext, connection_ctx: &mut ConnectionContext, other_ctx: &mut ConnectionContext, mut packet: UnparsedPacket<&[u8]>, inbound: bool) -> (TransformationResult, Option<IndexedVec<u8>>) {
         let id = packet.id;
         let packet_supplier;
         let transformers;
-        if in_bound {
+        if inbound {
             packet_supplier = if let Some(t) = self.inbound_packets.get(&connection_ctx.state).unwrap().get(&id) {
                 t
             } else { return (Unchanged, None); };

@@ -61,8 +61,10 @@ fn spawn_thread(handler: Arc<HandlingContext>, id: usize) -> PaxyThread {
     });
     PaxyThread { thread, channel: tx }
 }
-// TODO add transformer results like Updated, Unchanged, Cancelled
+
+//todo add sending packets
 pub fn start(proxy_address: SocketAddr, server_address: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Starting Paxy");
     // Create TCP server
     let mut listener = TcpListener::bind(proxy_address)?;
 
@@ -94,6 +96,7 @@ pub fn start(proxy_address: SocketAddr, server_address: SocketAddr) -> Result<()
     let listener_token = Token(0);
     poll.registry().register(&mut listener, listener_token, Interest::READABLE).unwrap();
 
+    println!("Paxy Started");
     // handles accepting connections and messages a thread about it
     loop {
         poll.poll(&mut events, None).expect("couldn't poll");

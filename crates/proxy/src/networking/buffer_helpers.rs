@@ -140,13 +140,14 @@ pub fn copy_slice_to(from: &[u8], to: &mut IndexedVec<u8>) {
     to.put_slice(slice);
 }
 
-pub fn read_frame(buf: &mut IndexedVec<u8>, pointer: usize, len: usize) -> Option<(usize, usize)> {
+pub fn read_frame(buf: &mut IndexedVec<u8>, pointer: usize, len: usize, connection_ctx: &mut ConnectionContext) -> Option<(usize, usize)> {
     buf.set_reader_index(pointer);
     if len > pointer {
         if len - pointer >= 3 {
             return if let Some((len, bytes_read)) = buf.get_var_i32_limit(3) {
                 Some((len as usize, bytes_read as usize))
             } else {
+                connection_ctx.should_close = true;
                 None
             }
         } else {
@@ -155,11 +156,13 @@ pub fn read_frame(buf: &mut IndexedVec<u8>, pointer: usize, len: usize) -> Optio
                     return if let Some((len, bytes_read)) = buf.get_var_i32_limit(3) {
                         Some((len as usize, bytes_read as usize))
                     } else {
+                        connection_ctx.should_close = true;
                         None
                     }
                 }
             }
         }
     }
+    buf.set_reader_index(pointer);
     None
 }

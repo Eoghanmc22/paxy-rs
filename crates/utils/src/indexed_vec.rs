@@ -80,6 +80,10 @@ impl<T> IndexedVec<T> {
         let range = self.get_writer_index()..;
         &mut self.vec[range]
     }
+
+    pub fn readable_bytes(&self) -> usize {
+        self.writer_index-self.reader_index
+    }
 }
 
 impl Buf for IndexedVec<u8> {

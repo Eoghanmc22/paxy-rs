@@ -43,7 +43,8 @@ impl<T: Buf> VarInts for T {
             result |= (read & 0b01111111).overflowing_shl((7 * num_read) as u32).0;
             num_read += 1;
             if num_read > 5 {
-                panic!("VarInt is too big")
+                println!("VarInt is too big");
+                return None;
             }
             if read & 0b10000000 == 0 {
                 return Some((result, num_read));
