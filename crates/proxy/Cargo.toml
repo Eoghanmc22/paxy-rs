@@ -8,7 +8,7 @@ edition = "2018"
 
 [dependencies]
 mio = { version = "0.7.11", features = ["os-poll", "net"] }
-flate2 = { version = "1.0.19", features = ["zlib"], default-features = false }
+libdeflater = "0.7.1"
 num_cpus = "1.13.0"
 bytes = "1.0.1"
 packets = { path = "../packets" }

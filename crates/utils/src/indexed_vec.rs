@@ -72,8 +72,13 @@ impl<T> IndexedVec<T> {
         }
     }
 
-    pub fn to_slice(&self) -> &[T] {
+    pub fn as_slice(&self) -> &[T] {
         &self.vec[self.get_reader_index()..self.get_writer_index()]
+    }
+
+    pub fn as_mut_write_slice(&mut self) -> &mut [T] {
+        let range = self.get_writer_index()..;
+        &mut self.vec[range]
     }
 }
 

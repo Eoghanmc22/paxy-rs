@@ -144,7 +144,7 @@ impl Sendable for IndexedVec<u8> {
 
     fn write(mut buffer: &mut dyn BufMut, data: &Self) {
         buffer.put_var_i32(data.remaining() as i32);
-        buffer.put_slice(data.to_slice());
+        buffer.put_slice(data.as_slice());
     }
 }
 
@@ -160,6 +160,6 @@ impl Sendable for InferLenVec {
     }
 
     fn write(buffer: &mut dyn BufMut, data: &Self) {
-        buffer.put_slice(data.to_slice());
+        buffer.put_slice(data.as_slice());
     }
 }

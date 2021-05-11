@@ -5,10 +5,10 @@ use mio::net::TcpStream;
 
 use utils::contexts::ConnectionContext;
 use utils::indexed_vec::IndexedVec;
+use utils::buffers::VarInts;
 
 pub fn read_socket(ctx: &mut ConnectionContext, packet: &mut IndexedVec<u8>) -> bool {
-    let w_i = packet.get_writer_index();
-    let result = ctx.stream.read(&mut packet.vec[w_i as usize..]);
+    let result = ctx.stream.read(packet.as_mut_write_slice());
     match result {
         Ok(read) => {
             packet.advance_writer_index(read);
@@ -107,21 +107,18 @@ pub fn write_socket0(stream: &mut TcpStream, packet: &mut IndexedVec<u8>, should
 
 /// store unread data
 pub fn buffer_read(ctx: &mut ConnectionContext, buffering_buf: &mut IndexedVec<u8>) {
-    let slice = &buffering_buf.vec[buffering_buf.get_reader_index()..buffering_buf.get_writer_index()];
-    ctx.read_buffering.put_slice(slice);
+    ctx.read_buffering.put_slice(buffering_buf.as_slice());
 }
 
 /// recall unread data
 pub fn unbuffer_read(ctx: &mut ConnectionContext, buffering_buf: &mut IndexedVec<u8>) {
-    let slice = &ctx.read_buffering.vec[ctx.read_buffering.get_reader_index()..ctx.read_buffering.get_writer_index()];
-    buffering_buf.put_slice(slice);
+    buffering_buf.put_slice(ctx.read_buffering.as_slice());
     ctx.read_buffering.reset();
 }
 
 /// store unwritten data
 pub fn buffer_write(ctx: &mut ConnectionContext, buffering_buf: &mut IndexedVec<u8>) {
-    let slice = &buffering_buf.vec[buffering_buf.get_reader_index()..buffering_buf.get_writer_index()];
-    ctx.write_buffering.put_slice(slice);
+    ctx.write_buffering.put_slice(buffering_buf.as_slice());
 }
 
 /// store unwritten slice of data
@@ -143,13 +140,26 @@ pub fn copy_slice_to(from: &[u8], to: &mut IndexedVec<u8>) {
     to.put_slice(slice);
 }
 
-pub fn validate_small_frame(buf: &mut IndexedVec<u8>, pointer: usize, len: usize) -> bool {
-    if len > pointer && len - pointer < 3 {
-        for index in pointer..len {
-            if buf.vec[index] < 128 {
-                return true;
+pub fn read_frame(buf: &mut IndexedVec<u8>, pointer: usize, len: usize) -> Option<(usize, usize)> {
+    buf.set_reader_index(pointer);
+    if len > pointer {
+        if len - pointer >= 3 {
+            return if let Some((len, bytes_read)) = buf.get_var_i32_limit(3) {
+                Some((len as usize, bytes_read as usize))
+            } else {
+                None
+            }
+        } else {
+            for index in pointer..len {
+                if buf.vec[index] < 128 {
+                    return if let Some((len, bytes_read)) = buf.get_var_i32_limit(3) {
+                        Some((len as usize, bytes_read as usize))
+                    } else {
+                        None
+                    }
+                }
             }
         }
     }
-    false
+    None
 }
