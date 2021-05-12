@@ -1,11 +1,13 @@
 use std::io::{ErrorKind, Read, Write};
 
 use bytes::BufMut;
+use libdeflater::{Compressor, Decompressor};
 use mio::net::TcpStream;
 
+use utils::add_vec_len;
+use utils::buffers::{VarInts, VarIntsMut};
 use utils::contexts::ConnectionContext;
 use utils::indexed_vec::IndexedVec;
-use utils::buffers::VarInts;
 
 pub fn read_socket(ctx: &mut ConnectionContext, packet: &mut IndexedVec<u8>) -> bool {
     let result = ctx.stream.read(packet.as_mut_write_slice());
@@ -165,4 +167,43 @@ pub fn read_frame(buf: &mut IndexedVec<u8>, pointer: usize, len: usize, connecti
     }
     buf.set_reader_index(pointer);
     None
+}
+
+pub fn get_needed_data(read_buf: &mut IndexedVec<u8>, connection_ctx: &mut ConnectionContext) {
+    unbuffer_read(connection_ctx, read_buf);
+    while read_socket(connection_ctx, read_buf) {
+        if connection_ctx.should_close {
+            return;
+        }
+        if read_buf.get_writer_index() == read_buf.vec.len() {
+            let len = read_buf.vec.len();
+            // double size
+            add_vec_len(&mut read_buf.vec, len);
+        } else {
+            break;
+        }
+    }
+}
+
+pub fn decompress_packet<'a>(real_length: usize, working_buf: &mut &'a[u8], decompressor: &mut Decompressor, compression_buffer: &'a mut IndexedVec<u8>) {
+    compression_buffer.reset();
+    compression_buffer.ensure_writable(real_length);
+
+    //decompress
+    decompressor.zlib_decompress(working_buf, compression_buffer.as_mut_write_slice()).unwrap();
+    compression_buffer.set_writer_index(real_length);
+
+    *working_buf = compression_buffer.as_slice();
+}
+
+pub fn compress_packet<'a>(packet: &mut &'a[u8], compressor: &mut Compressor, compression_buffer: &'a mut IndexedVec<u8>) {
+    compression_buffer.reset();
+    compression_buffer.put_var_i32(packet.len() as i32);
+    compression_buffer.ensure_writable(compressor.zlib_compress_bound(packet.len()));
+
+    //compress
+    let written = compressor.zlib_compress(packet, compression_buffer.as_mut_write_slice()).unwrap();
+    compression_buffer.set_writer_index(written);
+
+    *packet = compression_buffer.as_slice();
 }

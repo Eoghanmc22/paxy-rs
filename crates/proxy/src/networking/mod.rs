@@ -1,21 +1,21 @@
-pub mod buffer_helpers;
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
+use libdeflater::{CompressionLvl, Compressor, Decompressor};
 use mio::{Events, Poll};
 
+use buffer_helpers::{buffer_read, copy_slice_to, read_frame, write_socket, write_socket0};
 use packet_transformation::handling::{HandlingContext, UnparsedPacket};
-use utils::contexts::{Message, NetworkThreadContext, ConnectionContext};
-use utils::contexts::Message::{Threads, NewConnection};
-use utils::indexed_vec::IndexedVec;
-use buffer_helpers::{write_socket0, unbuffer_read, write_socket, buffer_read, copy_slice_to, read_frame, read_socket};
-use utils::buffers::{VarInts, VarIntsMut};
-use utils::add_vec_len;
 use packet_transformation::TransformationResult;
-use libdeflater::{Decompressor, Compressor, CompressionLvl};
+use utils::buffers::{VarInts, VarIntsMut};
+use utils::contexts::{ConnectionContext, Message, NetworkThreadContext};
+use utils::contexts::Message::{NewConnection, Threads};
+use utils::indexed_vec::IndexedVec;
+use crate::networking::buffer_helpers::{get_needed_data, decompress_packet, compress_packet};
+
+pub mod buffer_helpers;
 
 /// Start network thread loop.
 /// Responsible for parsing and transforming every out/incoming packets.
@@ -217,43 +217,4 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
 
     buffer_read(connection_ctx, read_buf);
     write_socket(other_ctx, caching_buf);
-}
-
-pub fn get_needed_data(read_buf: &mut IndexedVec<u8>, connection_ctx: &mut ConnectionContext) {
-    unbuffer_read(connection_ctx, read_buf);
-    while read_socket(connection_ctx, read_buf) {
-        if connection_ctx.should_close {
-            return;
-        }
-        if read_buf.get_writer_index() == read_buf.vec.len() {
-            let len = read_buf.vec.len();
-            // double size
-            add_vec_len(&mut read_buf.vec, len);
-        } else {
-            break;
-        }
-    }
-}
-
-pub fn decompress_packet<'a>(real_length: usize, working_buf: &mut &'a[u8], decompressor: &mut Decompressor, compression_buffer: &'a mut IndexedVec<u8>) {
-    compression_buffer.reset();
-    compression_buffer.ensure_writable(real_length);
-
-    //decompress
-    decompressor.zlib_decompress(working_buf, compression_buffer.as_mut_write_slice()).unwrap();
-    compression_buffer.set_writer_index(real_length);
-
-    *working_buf = compression_buffer.as_slice();
-}
-
-pub fn compress_packet<'a>(packet: &mut &'a[u8], compressor: &mut Compressor, compression_buffer: &'a mut IndexedVec<u8>) {
-    compression_buffer.reset();
-    compression_buffer.put_var_i32(packet.len() as i32);
-    compression_buffer.ensure_writable(compressor.zlib_compress_bound(packet.len()));
-
-    //compress
-    let written = compressor.zlib_compress(packet, compression_buffer.as_mut_write_slice()).unwrap();
-    compression_buffer.set_writer_index(written);
-
-    *packet = compression_buffer.as_slice();
 }
