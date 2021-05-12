@@ -6,16 +6,14 @@ use std::time::Duration;
 use libdeflater::{CompressionLvl, Compressor, Decompressor};
 use mio::{Events, Poll};
 
-use buffer_helpers::{buffer_read, copy_slice_to, read_frame, write_socket, write_socket0};
 use packet_transformation::handling::{HandlingContext, UnparsedPacket};
 use packet_transformation::TransformationResult;
+use utils::buffer_helpers::{buffer_read, copy_slice_to, read_frame, write_socket, write_socket0};
+use utils::buffer_helpers::{compress_packet, decompress_packet, get_needed_data};
 use utils::buffers::{VarInts, VarIntsMut};
 use utils::contexts::{ConnectionContext, Message, NetworkThreadContext};
 use utils::contexts::Message::{NewConnection, Threads};
 use utils::indexed_vec::IndexedVec;
-use crate::networking::buffer_helpers::{get_needed_data, decompress_packet, compress_packet};
-
-pub mod buffer_helpers;
 
 /// Start network thread loop.
 /// Responsible for parsing and transforming every out/incoming packets.
@@ -151,6 +149,7 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
                 if compression_threshold > 0 {
                     let real_length = working_buf.get_var_i32();
                     if real_length.0 > 0 {
+                        compression_buffer.reset();
                         decompress_packet(real_length.0 as usize, &mut working_buf, decompressor, compression_buffer);
                     }
                 }
@@ -173,6 +172,7 @@ fn process_read(mut thread_ctx: &mut NetworkThreadContext,
                         if compression_threshold > 0 {
                             let length = final_buffer.len();
                             if length > compression_threshold as usize {
+                                compression_buffer.reset();
                                 compress_packet(&mut final_buffer, compressor, compression_buffer);
                             } else {
                                 is_uncompressed = true;

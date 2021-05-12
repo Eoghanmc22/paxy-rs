@@ -62,7 +62,7 @@ fn spawn_thread(handler: Arc<HandlingContext>, id: usize) -> PaxyThread {
     PaxyThread { thread, channel: tx }
 }
 
-//todo add sending packets
+//todo use generics over dynamic dispatch
 pub fn start(proxy_address: SocketAddr, server_address: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Paxy");
     // Create TCP server

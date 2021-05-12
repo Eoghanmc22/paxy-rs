@@ -1,4 +1,4 @@
-use crate::add_vec_len;
+use crate::{add_vec_len, set_vec_len};
 use bytes::{Buf, BufMut};
 use bytes::buf::UninitSlice;
 use std::io::{Write, Error, Read};
@@ -12,11 +12,13 @@ pub struct IndexedVec<T> {
 
 impl<T> IndexedVec<T> {
     pub fn new() -> IndexedVec<T> {
-        IndexedVec {
-            vec: Vec::new(),
-            writer_index: 0,
-            reader_index: 0
-        }
+        IndexedVec::with_len(256)
+    }
+
+    pub fn with_len(len: usize) -> IndexedVec<T> {
+        let mut vec = Vec::with_capacity(len);
+        set_vec_len(&mut vec, len);
+        IndexedVec::from_vec(vec)
     }
 
     pub fn from_vec(vec: Vec<T>) -> IndexedVec<T> {
@@ -68,7 +70,16 @@ impl<T> IndexedVec<T> {
         let remaining = self.vec.len() - self.get_writer_index();
         if remaining < extra {
             let needed = extra - remaining;
-            add_vec_len(&mut self.vec, needed);
+            self.reallocate(needed);
+        }
+    }
+
+    pub fn reallocate(&mut self, min_extra: usize) {
+        let mut extra = 0;
+        let increment = self.vec.len();
+        while extra < min_extra {
+            extra += increment;
+            add_vec_len(&mut self.vec, increment) // Grow the vec
         }
     }
 
@@ -117,7 +128,7 @@ unsafe impl BufMut for IndexedVec<u8> {
 
     fn chunk_mut(&mut self) -> &mut UninitSlice {
         if self.get_writer_index() == self.vec.len() {
-            add_vec_len(&mut self.vec, 64) // Grow the vec
+            self.reallocate(64); // Grow the vec
         }
 
         let cap = self.vec.len();

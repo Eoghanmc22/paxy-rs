@@ -8,4 +8,5 @@ edition = "2018"
 
 [dependencies]
 bytes = "1.0.1"
+libdeflater = "0.7.1"
 mio = { version = "0.7.11", features = ["os-poll", "net"] }

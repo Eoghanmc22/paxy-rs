@@ -4,10 +4,9 @@ use bytes::BufMut;
 use libdeflater::{Compressor, Decompressor};
 use mio::net::TcpStream;
 
-use utils::add_vec_len;
-use utils::buffers::{VarInts, VarIntsMut};
-use utils::contexts::ConnectionContext;
-use utils::indexed_vec::IndexedVec;
+use crate::buffers::{VarInts, VarIntsMut};
+use crate::contexts::ConnectionContext;
+use crate::indexed_vec::IndexedVec;
 
 pub fn read_socket(ctx: &mut ConnectionContext, packet: &mut IndexedVec<u8>) -> bool {
     let result = ctx.stream.read(packet.as_mut_write_slice());
@@ -178,7 +177,7 @@ pub fn get_needed_data(read_buf: &mut IndexedVec<u8>, connection_ctx: &mut Conne
         if read_buf.get_writer_index() == read_buf.vec.len() {
             let len = read_buf.vec.len();
             // double size
-            add_vec_len(&mut read_buf.vec, len);
+            read_buf.reallocate(len);
         } else {
             break;
         }
@@ -186,7 +185,6 @@ pub fn get_needed_data(read_buf: &mut IndexedVec<u8>, connection_ctx: &mut Conne
 }
 
 pub fn decompress_packet<'a>(real_length: usize, working_buf: &mut &'a[u8], decompressor: &mut Decompressor, compression_buffer: &'a mut IndexedVec<u8>) {
-    compression_buffer.reset();
     compression_buffer.ensure_writable(real_length);
 
     //decompress
@@ -197,7 +195,6 @@ pub fn decompress_packet<'a>(real_length: usize, working_buf: &mut &'a[u8], deco
 }
 
 pub fn compress_packet<'a>(packet: &mut &'a[u8], compressor: &mut Compressor, compression_buffer: &'a mut IndexedVec<u8>) {
-    compression_buffer.reset();
     compression_buffer.put_var_i32(packet.len() as i32);
     compression_buffer.ensure_writable(compressor.zlib_compress_bound(packet.len()));
 

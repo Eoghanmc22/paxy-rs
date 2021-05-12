@@ -7,6 +7,11 @@ use mio::{Interest, Poll, Token};
 use mio::net::TcpStream;
 
 use crate::indexed_vec::IndexedVec;
+use crate::{Packet, get_var_i32_size};
+use crate::buffers::VarIntsMut;
+use crate::buffer_helpers::{compress_packet, write_socket};
+use libdeflater::{Compressor, CompressionLvl};
+use bytes::BufMut;
 
 pub struct PaxyThread {
     pub thread: JoinHandle<()>,
@@ -71,6 +76,54 @@ impl ConnectionContext {
 
     pub fn get_other<'a>(&self, thread_ctx: &'a mut NetworkThreadContext) -> &'a mut ConnectionContext {
         thread_ctx.connections.get_mut(&self.token_other).unwrap()
+    }
+
+    pub fn send_packet<P: Packet>(&mut self, packet: &P) {
+        let compression_threshold = self.compression_threshold;
+        let mut buf = IndexedVec::new();
+        // total len
+        buf.advance_writer_index(3);
+        buf.advance_reader_index(3);
+        if compression_threshold > 0 {
+            // the 0 if the packet is uncompressed
+            buf.put_u8(0);
+            buf.advance_reader_index(1);
+        }
+        buf.put_var_i32(P::get_id());
+        packet.write(&mut buf);
+
+        if compression_threshold > 0 {
+            let mut buffer = buf.as_slice();
+            if buffer.len() as i32 > compression_threshold {
+                let mut compression_buf = IndexedVec::new();
+                // total len
+                compression_buf.advance_writer_index(3);
+                compression_buf.advance_reader_index(3);
+                compress_packet(&mut buffer, &mut Compressor::new(CompressionLvl::fastest()), &mut compression_buf);
+                buf = compression_buf;
+            }
+        }
+
+        let len = buf.get_writer_index()-3;
+
+        let len_size = get_var_i32_size(len as i32) as usize;
+
+        if len_size > 3 {
+            println!("illegal packet len");
+            self.should_close = true;
+            return;
+        }
+
+        let start = 3 - len_size;
+        let end = buf.get_writer_index();
+        buf.set_writer_index(start);
+
+        buf.put_var_i32(len as i32);
+
+        buf.set_reader_index(start);
+        buf.set_writer_index(end);
+
+        write_socket(self, &mut buf);
     }
 }
 
