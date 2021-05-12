@@ -43,11 +43,11 @@ fn register_packets(handler_context: &mut HandlingContext) {
 }
 
 fn register_transformers(handler_context: &mut HandlingContext) {
-    handler_context.register_transformer(|_thread_ctx, _connection_ctx, _other_ctx, packet: &mut s2c::play::EntityPositionPacket| {
+    /*handler_context.register_transformer(|_thread_ctx, _connection_ctx, _other_ctx, packet: &mut s2c::play::EntityPositionPacket| {
         packet.delta_x = 0;
         packet.delta_y = 100;
         Modified
-    });
+    });*/
     /*handler_context.register_transformer(|_thread_ctx, _connection_ctx, _other_ctx, _packet: &mut c2s::status::Ping| {
         Canceled
     });*/

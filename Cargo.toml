@@ -9,3 +9,6 @@ members = ["crates/*"]
 
 [dependencies]
 proxy = { path = "./crates/proxy/" }
+
+[profile.release]
+debug = true
