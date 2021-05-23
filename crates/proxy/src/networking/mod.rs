@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use libdeflater::{CompressionLvl, Compressor, Decompressor};
 use mio::{Events, Poll};
@@ -60,6 +60,7 @@ pub fn thread_loop(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usi
 
     // Start parsing loop
     loop {
+        let ins = Instant::now();
         poll.poll(&mut events, Some(dur)).expect("couldn't poll");
         for event in events.iter() {
             // FIXME: I used remove to get around the borrow checker hopefully there is a better way. also i assume this is slower.
@@ -96,6 +97,11 @@ pub fn thread_loop(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usi
                 }
                 _ => { println!("got unexpected message"); }
             }
+        }
+
+        let elapsed = ins.elapsed();
+        if elapsed < dur {
+            std::thread::sleep(dur-elapsed);
         }
     }
 }
