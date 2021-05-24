@@ -41,9 +41,9 @@ pub fn thread_loop(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usi
     let mut events = Events::with_capacity(1000);
     let mut poll = Poll::new().expect("could not unwrap poll");
 
-    // max interval for polling the message queue
-    // todo adjust?
-    let dur = Duration::from_millis(10);
+    // max and min interval for polling the message queue
+    let max_delay = Duration::from_millis(200);
+    let min_delay = Duration::from_millis(10);
 
     //Per thread buffers
     let mut packet_buf = IndexedVec::new();
@@ -61,7 +61,7 @@ pub fn thread_loop(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usi
     // Start parsing loop
     loop {
         let ins = Instant::now();
-        poll.poll(&mut events, Some(dur)).expect("couldn't poll");
+        poll.poll(&mut events, Some(max_delay)).expect("couldn't poll");
         for event in events.iter() {
             // FIXME: I used remove to get around the borrow checker hopefully there is a better way. also i assume this is slower.
             if let Some(mut player) = thread_ctx.connections.remove(&event.token()) {
@@ -100,8 +100,8 @@ pub fn thread_loop(rx: Receiver<Message>, handler: Arc<HandlingContext>, id: usi
         }
 
         let elapsed = ins.elapsed();
-        if elapsed < dur {
-            std::thread::sleep(dur-elapsed);
+        if elapsed < min_delay {
+            std::thread::sleep(min_delay - elapsed);
         }
     }
 }
